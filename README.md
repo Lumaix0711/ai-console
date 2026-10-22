@@ -18,11 +18,12 @@
 
 - **代码**：OpenCode 采用 MIT 许可证。本项目通过本机 `opencode serve` 的本地 API 和数据库工作，仓库不包含 OpenCode 源码副本；第三方声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 - **免费模型**：OpenCode Zen 的免费模型受 [OpenCode 服务条款](https://opencode.ai/legal/terms-of-service)约束，MIT 许可证不覆盖这部分。官方明确表示免费模型只供 OpenCode 官方客户端使用，第三方应用或直接 API 调用会被拒绝。
-- **当前限制**：本版本只筛选以 `-free` 结尾的模型，不支持 BYOK 或付费模型；公开分发前应先确认是否符合 OpenCode 最新政策，或改成使用用户自己的 API key/付费模型。不要把本项目宣传成“免费模型官方入口”。
+- **模型策略**：默认同时显示免费、付费和 BYOK 模型；`config.json` 的 `freeOnly` 可切回仅免费。使用免费模型时必须遵守 OpenCode 条款；不要把本项目宣传成“免费模型官方入口”。
+- **BYOK 默认不自动开启**：`allowedProviders` 默认只有 `opencode`，避免把本机已登录的私有 provider（如 deepseek）或 ollama 暴露到界面；要接自己的 key，手动把 provider id 加进去。
 
 ## 快速开始（下载后）
 
-前置：Node.js >=22.13；已安装并登录 OpenCode；本机已有 `opencode.db`。
+前置：Node.js >=22.13；已安装并登录 OpenCode，并至少配置了一个可用的模型 provider（免费或自带 key）；本机已有 `opencode.db`。
 
 1. 确认 `config.json` 的 `upstream.bin` 指向 opencode（默认 `~/.opencode/bin/opencode`）。
 2. 在项目目录运行 `node server.mjs`（运行时零 npm 依赖，不需要先 `npm install`）。
@@ -88,7 +89,7 @@ ai-console/
 │   ├── db.mjs       只读 opencode.db
 │   ├── sse.mjs      上游 SSE 客户端（断线自动重连）
 │   ├── normalize.mjs 事件 → UI 状态
-│   └── models.mjs   免费模型运行时解析
+│   └── models.mjs   模型策略运行时解析
 ├── public/
 │   └── index.html   界面（内联 CSS/JS）
 └── output/          汇总结果，桌面有快捷方式，随时可删
@@ -595,8 +596,8 @@ M7 测试里有对应的防退化断言（搜「OpenCode 式语义染色」）�
 
 - **不选 = 跟随主 AI**：实现方式是**把 agent `.md` 里的 `model:` 字段删掉**，
   opencode 就会继承主会话的模型。
-- 选了 = 往 `model:` 字段写 `opencode/<id>`，并且只接受免费白名单里的模型
-  （传付费模型直接 400）。
+- 选了 = 往 `model:` 字段写 `<provider>/<id>`，只接受当前白名单里的模型
+  （含免费、付费和 BYOK；未知模型直接 400）。
 
 **关键机制**：改完 `.md` 必须让上游重读。`opencode serve` 在启动时缓存 agent 列表，
 改文件不重启是**不生效**的（实测：改完立刻查 `/agent` 仍是旧模型）。
@@ -721,7 +722,7 @@ WSHOT='\\wsl.localhost\<发行版>\home\<你>\ai-console\tools\shot.mjs'
 
 写代码或改配置时请守住：
 
-1. **不要在代码里硬编码模型 id。** 全部走 `lib/models.mjs` 运行时解析；免费模型只是当前默认，使用时必须遵守 OpenCode 的服务条款。
+1. **不要在代码里硬编码模型 id。** 全部走 `lib/models.mjs` 运行时解析；免费模型只是其中一类，使用时必须遵守 OpenCode 的服务条款。
 2. **不要动 `config.json` 里的绝对路径。** `~/` 开头和相对路径是可移植写法，写死的 `/...` 会让整个文件夹搬不了家。
 
 ## M4 能力实测数据
@@ -951,7 +952,7 @@ AI 一旦用 read / bash 去读 `~/.config/opencode/opencode.json`，opencode �
   的事件推进右端，`tool` part 按 id 去重计数。
 - 上下文水位取**最新一条 assistant 消息**的 `tokens.total - output - reasoning`
   （即提示词那侧，含缓存读/写）；上限从 `/api/health` 的模型 `limit.context` 取，
-  模型不在免费白名单里时宁可不显示，也不编数字。
+  模型不在当前模型列表里时宁可不显示，也不编数字。
 - 根会话头部的小胶囊显示自身 `ctx N%`：≥65% 变琥珀、≥85% 变红并提示可以压缩（接 M16）。
 - 只有子代理真的在跑时才每秒推进条长，全部 idle 就停，不空转 CPU。
 - 冷知识：上游重启（AI Console 重启会连带重启它）后，旧会话在新实例里
@@ -989,7 +990,7 @@ AI 一旦用 read / bash 去读 `~/.config/opencode/opencode.json`，opencode �
 
 ## 测试与副作用
 
-离线静态测试：`npm test`（M7 / M9 / M10 / M18，不访问服务或数据库）。
+离线静态测试：`npm test`（M7 / M9 / M10 / M18 / M19，不访问服务或数据库）。
 
 其余 M0/M1/M4–M6/M8/M11–M17 会连接本机 AI Console、`opencode serve` 或数据库，其中 M1/M4/M5/M8 会在真实数据库里创建测试会话并写入 `output/`，M6 会清空 `screenshots/`。不要在保存重要会话的数据库上直接跑；先备份 `opencode.db`，跑完按需清理测试会话和产物。测试输出可能包含本机会话标题/目录，勿直接公开日志。
 
@@ -1001,7 +1002,7 @@ AI 一旦用 read / bash 去读 `~/.config/opencode/opencode.json`，opencode �
 | 历史聊天记录 | 只读 `~/.local/share/opencode/opencode.db`；列表走 `/api/history/list` |
 | MCP 状态 | `GET /mcp` |
 | Skill 列表 | 读 `~/.config/opencode/skills/*/SKILL.md` |
-| 免费模型 | `GET /provider`（含 reasoning 标记） |
+| 模型列表 | `GET /provider`（含 reasoning 标记） |
 | 待审批 / 待办 | `GET /permission`、`GET /session/:id/todo` |
 | 权限回复 | `POST /session/:id/permissions/:permissionID`，body `{response}` |
 | 撤回 / 恢复 / 分叉 / 压缩 | `POST /session/:id/{revert,unrevert,fork,summarize}`（实测见 M16 章） |

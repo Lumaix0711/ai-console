@@ -19,8 +19,12 @@
     "outputDir": "output"
   },
   "models": {
-    "_说明": "不硬编码模型清单，全部运行时解析。下面是筛选与排序规则。",
-    "freeOnly": true,
+    "_说明": "不硬编码模型清单，全部运行时解析。freeOnly=false 同时显示免费与付费/BYOK 模型；true 只显示免费模型。免费模型仍受 OpenCode 服务条款约束。",
+    "allowedProviders": [
+      "opencode"
+    ],
+    "_provider说明": "只读取列出的 provider，默认仅 OpenCode Zen，避免自动暴露本机已登录的私有 provider（如 deepseek/ollama）。要用自己的 key，手动加入 provider id（如 openai、anthropic）。",
+    "freeOnly": false,
     "requireReasoning": true,
     "privacyBlocklist": [
       "nemotron-",
@@ -34,13 +38,17 @@
     },
     "tierOrder": [
       {
-        "_说明": "官方隐私章节明确写了 zero-retention、不用于训练的两个",
+        "_说明": "官方隐私章节明确写了 zero-retention / 不用于训练的模型",
         "match": [
-          "space-bunny",
-          "longcat"
+          "deepseek-v4.1-flash-free",
+          "glm-5.3-flash-free",
+          "minimax-m3.1-flash-free",
+          "beam-free",
+          "longcat",
+          "space-bunny"
         ],
         "tier": 1,
-        "label": "zero-retention 不训练"
+        "label": "zero-retention / 不训练"
       },
       {
         "_说明": "其余免费模型：官方只写 for a limited time，没写数据豁免",

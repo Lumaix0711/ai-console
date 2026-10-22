@@ -3706,13 +3706,17 @@ $('envBtn').onclick = loadEnv
 
 // ═══════════════ 子代理模型 ═══════════════
 const SUB_AGENTS = ['researcher', 'cross-checker', 'orchestrator']
-let freeModels = []
+let subModels = []
 
 function paintSubPanel(cur = {}) {
   for (const sel of $('subPanel').querySelectorAll('select[data-agent]')) {
     const a = sel.dataset.agent
     const opts = ['<option value="">跟随主 AI（不指定）</option>']
-      .concat(freeModels.map((m) => `<option value="${esc(m.id)}">${esc(m.name || m.id)}</option>`))
+      .concat(subModels.map((m) => {
+        const val = m.ref || `${m.providerID || 'opencode'}/${m.id}`
+        const isFree = m.free ?? m.tier !== 100
+        return `<option value="${esc(val)}">${esc(m.name || m.id)}${isFree ? '' : ' · 付费'}</option>`
+      }))
     sel.innerHTML = opts.join('')
     sel.value = cur[a] ?? ''
     sel.onchange = checkSubWarn
@@ -3759,7 +3763,7 @@ async function loadSubModels() {
       fetch('/api/health').then((r) => r.json()),
       fetch('/api/subagent-model').then((r) => r.json()),
     ])
-    freeModels = h.models || []
+    subModels = h.models || []
     paintSubPanel(c.current || {})
   } catch (e) { toast('读取失败：' + e.message) }
 }
@@ -3947,14 +3951,23 @@ async function health() {
     models = j.models || []
     for (const r of S.values()) { paintCtx(r); if (!r.parentID) scheduleTL(r.sid) }
     const sel = $('modelSel')
-    sel.innerHTML = models.map((m) =>
-      `<option value="${esc(m.id)}"${m.tier === 1 ? '' : ' data-t2="1"'}>${esc(m.id.replace('-free',''))}${m.tier === 1 ? '' : ' ⚠️'}</option>`).join('')
-    if (!curModel || !models.some((m) => m.id === curModel)) curModel = models[0]?.id
+    sel.innerHTML = models.map((m) => {
+      const val = m.ref || `${m.providerID || 'opencode'}/${m.id}`
+      const isFree = m.free ?? m.tier !== 100
+      const tag = isFree ? (m.tier === 1 ? '' : ' ⚠️') : ' · 付费'
+      return `<option value="${esc(val)}"${isFree ? '' : ' data-paid="1"'}>${esc(m.id.replace('-free',''))}${tag}</option>`
+    }).join('')
+    const refOf = (m) => m.ref || `${m.providerID || 'opencode'}/${m.id}`
+    const isFree = (m) => m.free ?? m.tier !== 100
+    if (!curModel || !models.some((m) => refOf(m) === curModel)) curModel = models[0] ? refOf(models[0]) : null
     sel.value = curModel || ''
     const b = $('banner')
     if (j.modelWarning) {
+      const freeCount = j.freeCount ?? models.filter(isFree).length
+      const paidCount = j.paidCount ?? models.filter((m) => !isFree(m)).length
       b.style.display = 'block'
-      b.textContent = `⚠️ 可用免费模型只剩 ${models.length} 个：${models.map((m) => m.id).join('、')}。免费模型限时提供，耗尽后需转付费。` +
+      b.textContent = `⚠️ 可用免费模型只剩 ${freeCount} 个：${models.filter(isFree).map((m) => m.id).join('、')}。免费模型限时提供，耗尽后需转付费。` +
+        (paidCount ? ` 另有 ${paidCount} 个付费/BYOK 模型可切换。` : '') +
         (j.modelBlocked?.length ? ` 已自动排除 ${j.modelBlocked.length} 个（隐私原因）。` : '')
     } else b.style.display = 'none'
     $('send').disabled = false

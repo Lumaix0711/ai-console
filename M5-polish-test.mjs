@@ -157,9 +157,9 @@ check('增量先进 data-full 再渲染', js.includes('pre.dataset.full'))
 log('\n══════ 后端实测 ══════\n')
 const h = await (await fetch(`${UI}/api/health`)).json()
 check('health 返回可选模式', h.modes?.length === 2, (h.modes || []).map((m) => m.name).join(','))
-check('health 返回被排除模型及原因', h.modelBlocked?.length === 3,
+check('health 返回被排除模型及原因', (h.modelBlocked?.length ?? 0) >= 3,
   h.modelBlocked?.map((m) => `${m.id}(${m.reason.slice(0, 14)}…)`).join(' '))
-check('模型全部是免费模型', h.models.every((m) => m.id.endsWith('-free')))
+check('模型列表非空且带免费/付费标签', h.models.length > 0 && h.models.every((m) => !!m.tierLabel))
 check('T1 zero-retention 排在最前', h.models[0]?.tier === 1, h.models[0]?.id)
 
 // ── 2. 实发一条，验证 plan 模式 + 中文约束 ─────────────
@@ -188,12 +188,12 @@ const r2 = await (await fetch(`${UI}/api/send`, {
 })).json()
 check('★ 非法模式被纠正为 build', r2.agent === 'build', `收到 "${r2.agent}"`)
 
-// 付费模型应被拒绝
+// 未知模型应回落到默认模型
 const r3 = await (await fetch(`${UI}/api/send`, {
   method: 'POST', headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ text: 'hi', model: 'claude-opus-5', sessionID: r.sessionID }),
+  body: JSON.stringify({ text: 'hi', model: 'definitely-not-a-real-model', sessionID: r.sessionID }),
 })).json()
-check('★ 付费模型被拒绝（回落到免费）', r3.model?.endsWith('-free'), `实际用了 ${r3.model}`)
+check('★ 未知模型回落到可用模型', h.models.some((m) => m.id === r3.model), `实际用了 ${r3.model}`)
 
 // ── 3. 等完成，看中文与 delta ──────────────────────────
 log('')

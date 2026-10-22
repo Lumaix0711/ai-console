@@ -118,8 +118,8 @@ try {
   for (const m of r.blocked) {
     log(`    ❌ ${m.id.padEnd(30)} ${m.reason}`)
   }
-  check('至少解析出 1 个可用免费模型', r.allowed.length > 0)
-  check('付费模型被排除', r.allowed.every(m => m.id.endsWith('-free')))
+  check('至少解析出 1 个可用模型', r.allowed.length > 0)
+  check('每个模型都有分层标记', r.allowed.every(m => typeof m.tier === 'number'))
   check('隐私黑名单全部拦住', r.blocked.filter(m => /nemotron|muse-spark/.test(m.id)).length >= 3,
     `拦下 ${r.blocked.filter(m => /nemotron|muse-spark/.test(m.id)).length} 个`)
   check('默认首选是 zero-retention 档', r.allowed[0]?.tier === 1, `首选 ${r.allowed[0]?.id} T${r.allowed[0]?.tier}`)
@@ -136,10 +136,10 @@ client.on('__close', (e) => log(`  ⚠️  SSE 断开: ${e.error}，${Math.round
 client.connect()
 await sleep(2000)
 
-// 用模型解析挑一个免费的
+// 用模型解析挑一个可用模型
 const mr = await resolveModels({ baseUrl: BASE, force: true })
 const model = mr.allowed[0]?.id
-check('运行时解析到免费模型', !!model, model ? `${model}  T${mr.allowed[0].tier}` : '（无）')
+check('运行时解析到模型', !!model, model ? `${model}  T${mr.allowed[0].tier}` : '（无）')
 if (model) {
   const s = await (await fetch(`${BASE}/session`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'M1-test ' + model }) })).json()
   log(`  会话已建: ${s.id}`)

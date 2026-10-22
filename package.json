@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.mjs",
     "build:css": "npx @tailwindcss/cli -i src/input.css -o public/app.css",
-    "test": "node M7-md-test.mjs && node M9-toolgroup-test.mjs && node M10-diff-test.mjs && node M18-home-test.mjs"
+    "test": "node M7-md-test.mjs && node M9-toolgroup-test.mjs && node M10-diff-test.mjs && node M18-home-test.mjs && node M19-models-test.mjs"
   },
   "keywords": [
     "opencode",

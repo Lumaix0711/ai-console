@@ -59,26 +59,26 @@ check('★ 默认三个子代理都不写死模型（继承主 AI）',
 
 // 再验证"手动挑选"这条路：给两个 review agent 指定不同模型，上游要真的换掉
 log('  ── 手动指定模型（跨模型 review）──')
-const M1 = 'space-bunny-free', M2 = 'longcat-2.5-preview-free'
+const M1 = 'beam-free', M2 = 'deepseek-v4.1-flash-free'
 const sr = await (await fetch(`${UP}/api/subagent-model`, {
   method: 'POST', headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ researcher: M1, 'cross-checker': M2, orchestrator: '' }),
 })).json()
 if (sr.error) { check('手动指定模型', false, sr.error) } else {
   check('★ 手动指定后上游真的换了模型',
-    sr.actual?.researcher === M1 && sr.actual?.['cross-checker'] === M2,
+    sr.actual?.researcher === `opencode/${M1}` && sr.actual?.['cross-checker'] === `opencode/${M2}`,
     JSON.stringify(sr.actual))
   const after = await (await fetch(`${UP}/api/agents`)).json()
   const g = (n) => after.find((a) => a.name === n)?.model?.modelID ?? ''
   check('★ /api/agents 也反映新模型', g('researcher') === M1 && g('cross-checker') === M2,
     `${g('researcher')} vs ${g('cross-checker')}`)
 }
-// 非法模型必须被拒（不能偷偷用付费模型）
+// 未知模型必须被拒（不能偷偷用白名单外的模型）
 const bad = await fetch(`${UP}/api/subagent-model`, {
   method: 'POST', headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ researcher: 'claude-opus-4-5', 'cross-checker': '', orchestrator: '' }),
+  body: JSON.stringify({ researcher: 'definitely-not-a-model', 'cross-checker': '', orchestrator: '' }),
 })
-check('★ 付费模型被拒', bad.status === 400, `HTTP ${bad.status}`)
+check('★ 白名单外模型被拒', bad.status === 400, `HTTP ${bad.status}`)
 // 复原成默认（跟随主 AI）
 await fetch(`${UP}/api/subagent-model`, {
   method: 'POST', headers: { 'content-type': 'application/json' },

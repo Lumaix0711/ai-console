@@ -12,7 +12,7 @@ import { loadConfig, expandPath, PUBLIC_DIR, ROOT } from './lib/paths.mjs'
 import { createClient } from './lib/sse.mjs'
 import { createStore, wire } from './lib/normalize.mjs'
 import { writeSummary } from './lib/output.mjs'
-import { resolveModels } from './lib/models.mjs'
+import { resolveModels, pickModel } from './lib/models.mjs'
 import { closeDb, listSessions, getSession, getMessages, getSessionTree, getStats, listProjects } from './lib/db.mjs'
 import { ensureIndex, search as fullTextSearch, indexStatus } from './lib/search.mjs'
 
@@ -123,11 +123,14 @@ async function api(req, res, url) {
       ok: true,
       upstream: { ...UP, alive: await upstreamAlive() },
       models: (await resolveModels({ baseUrl: UP.baseUrl })).allowed.map(m => ({
-        id: m.id, tier: m.tier, tierLabel: m.tierLabel, context: m.context, reasoning: m.reasoning,
+        id: m.id, providerID: m.providerID, ref: `${m.providerID}/${m.id}`,
+        free: m.free, tier: m.tier, tierLabel: m.tierLabel, context: m.context, reasoning: m.reasoning,
       })),
       modelWarning: (await resolveModels({ baseUrl: UP.baseUrl })).lowWarning,
+      freeCount: (await resolveModels({ baseUrl: UP.baseUrl })).freeCount,
+      paidCount: (await resolveModels({ baseUrl: UP.baseUrl })).paidCount,
       modelBlocked: (await resolveModels({ baseUrl: UP.baseUrl })).blocked
-        .map((m) => ({ id: m.id, reason: m.reason })),
+        .map((m) => ({ id: m.id, providerID: m.providerID, reason: m.reason })),
       modes: (await (await fetch(`${UP.baseUrl}/agent`)).json())
         .filter((a) => a.mode === 'primary' && ['build', 'plan'].includes(a.name))
         .map((a) => ({ name: a.name, description: a.description })),
@@ -310,13 +313,14 @@ async function api(req, res, url) {
     try { payload = JSON.parse(body || '{}') } catch {}
 
     const mr = await resolveModels({ baseUrl: UP.baseUrl })
-    const allow = new Set(mr.allowed.map((m) => m.id))
+    const allow = new Map(mr.allowed.map((m) => [`${m.providerID}/${m.id}`, m]))
     const AGENTS = ['researcher', 'cross-checker', 'orchestrator']
     const pick = {}
     for (const a of AGENTS) {
       const v = String(payload[a] ?? '').trim()
-      if (v && !allow.has(v)) return json(res, { error: `模型不在免费白名单内: ${v}` }, 400)
-      pick[a] = v
+      const hit = v && (allow.get(v) || mr.allowed.find((m) => m.id === v))
+      if (v && !hit) return json(res, { error: `模型不在当前白名单内: ${v}` }, 400)
+      pick[a] = hit ? `${hit.providerID}/${hit.id}` : ''
     }
 
     const changed = []
@@ -372,9 +376,9 @@ async function api(req, res, url) {
     }
     try {
       const mr = await resolveModels({ baseUrl: UP.baseUrl })
-      // 解释术语用 tier1（zero-retention）模型优先，其次任何免费模型
+      // 解释术语优先用 tier1（zero-retention）模型，其次按当前策略排序
       const pick = mr.allowed[0]
-      if (!pick) return json(res, { error: '当前没有可用的免费模型' }, 503)
+      if (!pick) return json(res, { error: '当前没有可用模型' }, 503)
 
       const r = await fetch(`${UP.baseUrl}/session`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
@@ -391,7 +395,7 @@ async function api(req, res, url) {
       const r2 = await fetch(`${UP.baseUrl}/session/${sid}/message`, {
         method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          model: { providerID: 'opencode', modelID: pick.id },
+          model: { providerID: pick.providerID || 'opencode', modelID: pick.id },
           agent: 'build',
           parts: [{ type: 'text', text: question }],
           system: '所有面向用户的输出必须使用简体中文。代码、命令、专有名词可保留原文。',
@@ -419,11 +423,13 @@ async function api(req, res, url) {
     if (!text) return json(res, { error: 'text 不能为空' }, 400)
 
     const mr = await resolveModels({ baseUrl: UP.baseUrl, force: !!payload.refreshModels })
-    // 模型必须属于当前解析出的免费白名单，防止前端传了付费或本地模型
-    const modelID = payload.model && mr.allowed.some((m) => m.id === payload.model)
-      ? payload.model
-      : mr.allowed[0]?.id
-    if (!modelID) return json(res, { error: '当前没有可用的免费模型' }, 503)
+    // 前端优先传 provider/id（ref），兼容裸 model id。
+    // 只接受当前白名单里的模型，防止未授权 provider 或本地模型混进来。
+    const picked = pickModel(mr.allowed, payload.model, payload.providerID)
+    const chosen = picked || mr.allowed[0]
+    const modelID = chosen?.id
+    const providerID = chosen?.providerID || 'opencode'
+    if (!modelID) return json(res, { error: '当前没有可用模型' }, 503)
 
     // 模式：只允许 opencode 原生 primary agent（build / plan）
     let agent = payload.agent || 'build'
@@ -444,7 +450,7 @@ async function api(req, res, url) {
 
     // 中文约束走 system 字段，不污染用户原始输入
     const body2 = {
-      model: { providerID: 'opencode', modelID },
+      model: { providerID, modelID },
       agent,
       parts: [{ type: 'text', text }],
     }
@@ -465,7 +471,7 @@ async function api(req, res, url) {
     if (!r2.ok && r2.status !== 204) {
       return json(res, { error: `发消息失败 HTTP ${r2.status}`, detail: await r2.text() }, 502)
     }
-    return json(res, { ok: true, sessionID: sid, model: modelID, agent })
+    return json(res, { ok: true, sessionID: sid, model: modelID, providerID, agent })
   }
 
   if (p === '/api/abort' && req.method === 'POST') {
@@ -723,7 +729,7 @@ function readAgentModels() {
     const f = agentFile(a)
     if (!existsSync(f)) { out[a] = null; continue }
     const m = readFileSync(f, 'utf8').match(/^model:\s*\S+\s*$/m)
-    out[a] = m ? m[0].replace(/^model:\s*/, '').replace(/^opencode\//, '').trim() : ''
+    out[a] = m ? m[0].replace(/^model:\s*/, '').trim() : ''
   }
   return out
 }
@@ -733,15 +739,17 @@ async function readAgentModelsFromUpstream() {
     const out = {}
     for (const a of AGENT_NAMES) {
       const hit = d.find((x) => x.name === a)
-      out[a] = hit?.model?.modelID ?? ''
+      const providerID = hit?.model?.providerID
+      const modelID = hit?.model?.modelID
+      out[a] = providerID && modelID ? `${providerID}/${modelID}` : ''
     }
     return out
   } catch { return {} }
 }
 
 /** 空字符串 = 删掉 model 字段，让子代理继承主会话模型 */
-function writeAgentModel(src, modelID) {
-  const line = modelID ? `model: opencode/${modelID}\n` : ''
+function writeAgentModel(src, ref) {
+  const line = ref ? `model: ${ref}\n` : ''
   const re = /^model:\s*\S+\s*$\n?/m
   if (!re.test(src)) {
     if (!line) return src                       // 本来就没有，也不用加

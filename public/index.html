@@ -1,0 +1,3975 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="signaldesk">
+<head>
+<meta charset="utf-8">
+<title>AI Console</title>
+<link rel="stylesheet" href="/app.css">
+<style>
+/* ═══════════════════════════════════════════════════════════
+   设计方向：信号台
+   1. 颜色只表示"此刻正在发生"，静态内容一律灰阶
+   2. 层级靠字号、明度、留白建立，不靠卡片边框和阴影
+   3. 数据用等宽，叙述用无衬线
+   ═══════════════════════════════════════════════════════════ */
+:root{
+  --graphite:#0F1319;      /* 底：冷调石墨，不用纯黑 */
+  --slab:#161C24;          /* L1 一级面板 */
+  --slab2:#1B222B;         /* L2 二级面板 */
+  --slab3:#222B35;         /* L3 抬起面板（亮度叠层：越深越高，不用阴影撑层级） */
+  /* 边框不用实色，用半透明白色叠层 —— Linear 的做法，层级靠"微弱的光"而不是深色线 */
+  --rule:rgba(255,255,255,.055);
+  --rule2:rgba(255,255,255,.11);
+  --ease:cubic-bezier(.22,1,.36,1);   /* Linear 式缓动，快而不弹 */
+  --signal:#57E0C2;        /* 唯一强调色：薄荷青，只给活动态 */
+  --signal-dim:#2A6E60;
+  --muted:#7C8896;         /* 标签 / 时间 / 计数 */
+  --chalk:#E8EDF2;         /* 主文字 */
+  --warn:#D9A441;
+  --err:#E06B62;
+  /* Markdown 语义色 —— 取自 OpenCode 官方主题 packages/tui/src/theme/assets/opencode.json */
+  --md-heading:#9D7CD8;   /* markdownHeading = accent 紫 */
+  --md-strong:#F5A742;    /* markdownStrong  = 橙 */
+  --md-emph:#E5C07B;      /* markdownEmph    = 黄 */
+  --md-code:#7FD88F;      /* markdownCode    = 绿 */
+  --md-quote:#E5C07B;     /* markdownBlockQuote = 黄 */
+  --md-list:#FAB283;      /* markdownListItem = 主题橙 */
+  --md-enum:#56B6C2;      /* markdownListEnumeration = 青 */
+  --acw:92ch;             /* 内容列宽度（可调，顶栏「宽度」面板 / Alt+滚轮） */
+
+  --sans:"Segoe UI Variable Text","Segoe UI",system-ui,-apple-system,"Microsoft YaHei",sans-serif;
+  --mono:"Cascadia Mono",Consolas,ui-monospace,"SFMono-Regular",Menlo,monospace;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:var(--graphite);color:var(--chalk);overflow-x:hidden;
+  font:14.5px/1.7 var(--sans);
+  display:flex;flex-direction:column;
+  -webkit-font-smoothing:antialiased;
+}
+::selection{background:var(--signal-dim);color:#fff}
+/* 滚动条：深色界面里默认的白色滚动条极其扎眼，改成细窄、低对比 */
+*{scrollbar-width:thin;scrollbar-color:var(--rule) transparent}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--rule);border-radius:5px;border:2px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-thumb:hover{background:var(--rule2);background-clip:content-box}
+::-webkit-scrollbar-corner{background:transparent}
+:focus-visible{outline:2px solid var(--signal);outline-offset:2px;border-radius:3px}
+button,select,input,textarea{font:inherit;color:inherit}
+
+/* ── 顶栏：压成一条窄信号条，全部左对齐 ──────────────── */
+header{
+  display:flex;align-items:center;gap:15px;flex-wrap:nowrap;
+  height:44px;padding:0 24px;flex:none;overflow:hidden;
+  border-bottom:1px solid var(--rule);
+  background:var(--slab);
+}
+header select{min-width:0;max-width:150px}
+/* 右侧工具区：可收缩，放不下的由 adaptHeader 挪进 #hdrDrop */
+#hdrTools{display:flex;align-items:center;gap:12px;flex:0 1 auto;min-width:0;overflow:hidden;position:relative}
+#hdrTools>*{flex:none}
+#hdrMore{letter-spacing:1px}
+#hdrDrop{
+  position:fixed;z-index:70;min-width:180px;
+  display:flex;flex-direction:column;align-items:stretch;gap:3px;
+  background:var(--slab3);border:1px solid var(--rule2);border-radius:8px;padding:8px;
+  box-shadow:0 16px 40px rgba(0,0,0,.5);
+}
+#hdrDrop[hidden]{display:none}
+#hdrDrop>.tag,#hdrDrop>button,#hdrDrop>.seg{justify-content:flex-start;width:100%}
+#hdrDrop>.seg{justify-content:center}
+header>*,footer>*{max-width:1080px}
+header h1{
+  font-size:14px;font-weight:590;margin:0;letter-spacing:-.005em;font-variation-settings:'wght' 590;
+  color:var(--chalk);white-space:nowrap;
+}
+header h1::before{
+  content:'';display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:var(--muted);margin-right:8px;vertical-align:1px;
+}
+.spacer{flex:1}
+/* 顶栏里的 tag 不再是带框的小药丸，只是灰色的说明文字 */
+.tag{
+  display:inline-flex;align-items:center;gap:6px;
+  font:11.5px/1 var(--mono);color:var(--muted);white-space:nowrap;
+}
+.tag b{color:var(--chalk);font-weight:600;font-variant-numeric:tabular-nums}
+.tag + .tag::before{content:'';width:1px;height:11px;background:var(--rule);margin-right:8px}
+.cnt{cursor:pointer;border-radius:3px;padding:1px 3px;margin:-1px -3px;transition:color .12s,background .12s}
+.cnt:hover{color:var(--chalk);background:var(--slab2)}
+.cnt b{font-variant-numeric:tabular-nums}
+.dot{width:6px;height:6px;border-radius:50%;background:var(--muted);flex:none}
+.dot.ok{background:var(--signal)}
+.dot.busy{background:var(--signal);animation:pulse 1.1s ease-in-out infinite}
+.dot.err{background:var(--err)}
+.dot.warn{background:var(--warn)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.28}}
+@media (prefers-reduced-motion:reduce){.dot.busy{animation:none}}
+
+/* ── 权限审批卡（waiting 状态的操作化）──────────────
+   agent 被授权卡住时不再只是黄点+toast：在会话头下方插入一张卡，
+   三个动作（允许一次 / 总是允许 / 拒绝）直接回复上游。 */
+#permBtn{color:var(--warn)}
+#permBtn:hover:not(:disabled){color:var(--warn);border-color:var(--warn)}
+#alarmBtn.off{color:var(--muted);opacity:.75}
+.perm-card{
+  margin:10px 0 2px;padding:10px 13px;
+  border:1px solid color-mix(in srgb, var(--warn) 55%, var(--rule));
+  border-left:2px solid var(--warn);border-radius:4px;
+  background:color-mix(in srgb, var(--warn) 6%, transparent);
+}
+.perm-card .pc-head{display:flex;align-items:baseline;gap:10px;margin-bottom:6px}
+.perm-card .pc-title{font-size:12.5px;font-weight:600;color:var(--warn);flex:none}
+.perm-card .pc-meta{font:11px var(--mono);color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.perm-card .pc-pats{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 8px}
+.perm-card .pc-pat{
+  font:11.5px/1.5 var(--mono);color:var(--chalk);
+  background:var(--graphite);border:1px solid var(--rule);border-radius:3px;
+  padding:2px 7px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.perm-card .pc-acts{display:flex;gap:8px}
+.perm-card .pc-acts button{
+  height:26px;padding:0 12px;cursor:pointer;border-radius:4px;
+  border:1px solid var(--rule);background:var(--slab);
+  font-size:12px;color:var(--chalk);
+  transition:border-color .12s var(--ease),opacity .12s;
+}
+.perm-card .pc-acts button:hover:not(:disabled){border-color:var(--muted)}
+.perm-card .pc-acts .once{border-color:var(--signal-dim);color:var(--signal)}
+.perm-card .pc-acts .once:hover:not(:disabled){border-color:var(--signal)}
+.perm-card .pc-acts .rej{color:var(--err);border-color:color-mix(in srgb, var(--err) 45%, var(--rule))}
+.perm-card .pc-acts .rej:hover:not(:disabled){border-color:var(--err)}
+.perm-card .pc-acts button:disabled{opacity:.45;cursor:default}
+.perm-card.perm-hit{animation:permFlash .8s ease 2}
+@keyframes permFlash{0%,100%{box-shadow:none}50%{box-shadow:0 0 0 3px color-mix(in srgb, var(--warn) 30%, transparent)}}
+@media (prefers-reduced-motion:reduce){.perm-card.perm-hit{animation:none}}
+
+/* 待办条：会话头下方的折叠条（todo.updated 实时 + GET /session/:id/todo 回填） */
+.todo-strip{
+  margin:10px 0 2px;border:1px solid var(--rule);border-radius:4px;
+  background:color-mix(in srgb, var(--slab) 55%, transparent);overflow:hidden;
+}
+.todo-strip .ts-head{
+  display:block;width:100%;text-align:left;cursor:pointer;
+  background:none;border:0;padding:6px 12px;
+  font:11.5px var(--mono);color:var(--muted);
+}
+.todo-strip .ts-head:hover{color:var(--chalk)}
+.todo-strip .ts-list{padding:2px 12px 8px;display:flex;flex-direction:column;gap:4px}
+.todo-strip .ts-list[hidden]{display:none}
+.todo-strip .ts-item{display:flex;gap:8px;align-items:baseline;font-size:12.5px}
+.todo-strip .ts-ico{flex:none;font:11px var(--mono);width:12px;text-align:center;color:var(--muted)}
+.todo-strip .ts-txt{color:var(--chalk);min-width:0}
+.todo-strip .ts-item.done .ts-txt{color:var(--muted);text-decoration:line-through}
+.todo-strip .ts-item.done .ts-ico{color:var(--signal)}
+.todo-strip .ts-item.doing .ts-ico{color:var(--warn)}
+.todo-strip .ts-item.cancel .ts-txt{color:var(--muted);opacity:.6;text-decoration:line-through}
+
+.seg{display:inline-flex;border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+.seg button{
+  background:none;border:0;padding:3px 9px;cursor:pointer;
+  font:11px/1 var(--mono);color:var(--muted);
+}
+.seg button.on{background:var(--slab2);color:var(--chalk)}
+.seg button:hover:not(.on){color:var(--chalk)}
+
+select{
+  background:var(--slab);border:1px solid var(--rule);border-radius:4px;
+  padding:4px 7px;font:11.5px var(--mono);cursor:pointer;
+  min-width:170px;max-width:230px;
+}
+select:hover{border-color:var(--rule2)}
+
+.ghost{
+  background:none;border:1px solid transparent;border-radius:6px;
+  padding:5px 11px;cursor:pointer;font-size:12.5px;color:var(--muted);
+  font-variation-settings:'wght' 500;
+  transition:color .12s var(--ease),border-color .12s var(--ease),transform .1s var(--ease);
+}
+.ghost:active:not(:disabled){transform:scale(.96)}
+.ghost:hover:not(:disabled){color:var(--chalk);border-color:var(--rule2)}
+.ghost.sm{padding:2px 7px;font-size:11px}
+.act{
+  background:none;border:1px solid var(--signal-dim);border-radius:6px;
+  padding:4px 15px;cursor:pointer;font-size:12.5px;color:var(--signal);
+  font-variation-settings:'wght' 510;
+  transition:border-color .12s var(--ease),background .12s var(--ease),transform .1s var(--ease);
+}
+.act:active:not(:disabled){transform:scale(.97)}
+.act:hover:not(:disabled){border-color:var(--signal);background:rgba(87,224,194,.07)}
+.act.sm{padding:3px 12px;font-size:11.5px}
+button:disabled{opacity:.34;cursor:default}
+
+/* ── 主区 ──────────────────────────────────────────────── */
+/* 底部只留一屏内的呼吸位（原来 28vh 会把滚到底的最后一条顶到屏幕中段） */
+#main{flex:1;overflow-y:auto;overflow-x:hidden;padding:0 20px 12vh;scroll-behavior:smooth}
+/* 只有根会话是 #main 的直接子元素；子会话嵌在 .children 里，不受此限 */
+/* 会话卡宽度 = 内容列 92ch + 两侧 padding，整张卡（脊柱/标题/正文/边框）居中，
+   不再出现"脊柱贴左、正文居中、边框拉满"的三层错位（ChatGPT/Claude 的单栏居中模式） */
+#main>.session,#main>.placeholder{
+  max-width:calc(var(--acw) + 64px);margin-left:auto;margin-right:auto;
+}
+@media (prefers-reduced-motion:reduce){#main{scroll-behavior:auto}}
+
+#placeholder{
+  max-width:52ch;margin:16vh auto 0;text-align:center;
+  color:var(--muted);font-size:13px;line-height:2;
+}
+#placeholder b{color:var(--chalk);font-weight:600}
+
+/* 会话 = 区块 + 左侧状态脊柱，不是卡片 */
+.session,.child{
+  padding:16px 20px 20px 22px;
+  border-left:2px solid var(--rule2);
+  border-bottom:1px solid var(--rule);
+  position:relative;
+}
+.session.busy,.child.busy{border-left-color:var(--signal)}
+/* 子代理默认收起：只看状态头，点标题展开正文（M18） */
+.child.collapsed>.c-body{display:none}
+.child.collapsed>.c-head{margin-bottom:0;padding-bottom:2px;border-bottom-color:transparent}
+.child .c-head{cursor:pointer;align-items:center}
+.c-caret{font:10px var(--mono);color:var(--rule2);width:11px;flex:none;transition:transform .12s ease}
+.child:not(.collapsed) .c-caret{color:var(--signal)}
+.child{
+  margin:6px 0 6px 18px;padding-left:20px;
+  border-left-width:1px;border-left-color:var(--rule2);
+  border-bottom:0;
+}
+.child.busy{border-left-color:var(--signal)}
+
+.s-head,.c-head{display:flex;align-items:baseline;gap:12px;margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--rule)}
+.s-title{font-size:21px;font-weight:590;line-height:1.3;letter-spacing:-.014em;color:var(--chalk);font-variation-settings:'wght' 590}
+.c-title{font-size:15px;font-weight:510;line-height:1.4;letter-spacing:-.005em;color:var(--chalk);font-variation-settings:'wght' 510}
+.s-badge,.c-agent{
+  font:11px var(--mono);color:var(--muted);white-space:nowrap;
+}
+.s-meta,.s-progress{
+  font:11px var(--mono);color:var(--muted);white-space:nowrap;
+  font-variant-numeric:tabular-nums;
+}
+.s-progress i{font-style:normal}
+.s-progress b{color:var(--signal);font-weight:600}
+/* 会话级操作：hover 会话头才浮出（撤回 / 分叉 / 压缩，M16） */
+.s-acts{display:flex;gap:2px;opacity:0;transition:opacity .12s ease;align-self:center}
+.s-head:hover .s-acts{opacity:1}
+.s-acts button{
+  background:none;border:0;color:var(--muted);cursor:pointer;
+  font:11px var(--mono);padding:1px 6px;border-radius:4px;white-space:nowrap;
+}
+.s-acts button:hover{color:var(--chalk);background:var(--rule)}
+/* 已回退区段：整段压暗，提示"将被下一条新消息替换" */
+.msg.revd,.rp.revd,.tgroup.revd{opacity:.42}
+.rev-bar{
+  display:flex;gap:10px;align-items:center;
+  margin:0 0 14px;padding:8px 12px;border:1px solid #7d5f26;border-radius:6px;
+  background:rgba(190,140,50,.07);color:#d9b36a;
+  font:12px var(--mono);line-height:1.5;
+}
+.rev-bar button{
+  margin-left:auto;flex:none;background:none;border:1px solid #7d5f26;color:inherit;
+  border-radius:4px;padding:2px 10px;cursor:pointer;font:12px var(--mono);white-space:nowrap;
+}
+.rev-bar button:hover{background:rgba(190,140,50,.15)}
+.rev-bar button:disabled{opacity:.5;cursor:default}
+/* 上下文压缩点（summarize 合成消息） */
+.cmp-note{
+  color:var(--muted);font:11px var(--mono);padding:5px 0;margin:6px 0;
+  border-top:1px dashed var(--rule);border-bottom:1px dashed var(--rule);
+}
+
+.s-body,.c-body{max-width:none}
+/* 限宽加在元素上而不是容器上，表格和代码块才能突破正文宽度 */
+/* 限宽规则容易写套，三条一起看才明白：
+   1) .s-body 的直接子元素（思考/工具/派活）限宽 78ch
+   2) 但正文容器 .msg-body 自己要放开 —— 否则它内部的表格/代码块继承同一个窄宽度
+   3) 限宽加在 .msg-body 的子元素上，表格和代码块例外
+   （早先试过 .msg-body:has(.md-tw){max-width:100%}，那会把同一条消息里的正文一起撑满；
+     也犯过"容器和内部都限宽"的错，导致容器先被卡死。正确做法是只放开容器、不放开正文。） */
+/* 内容列居中 + 宽度可调（--acw 驱动，默认 92ch）。
+   关键：滑块要驱动**正文文字的限宽**（原来这里是写死的 92ch，
+   导致拉宽后容器变宽、文字还是 92ch —— 用户看到的就是"文本框往左拉、右边还是空的"）。
+   现在 .s-body 容器和内部正文都用同一个 --acw，拉宽时一行能排更多字。 */
+.s-body,.c-body{max-width:var(--acw);margin-inline:auto}
+.s-body>*,.c-body>*{max-width:var(--acw)}
+.s-body>.msg-body,.c-body>.msg-body{max-width:100%}
+.msg-body>*,.rp-txt>*{max-width:var(--acw)}
+.msg-body>.md-tw,.msg-body>.md-pre,.msg-body>.md-code,.rp-txt>.md-tw,.rp-txt>.md-pre,.rp-txt>.md-code{max-width:100%}
+.s-body>.blk[data-type="tool"]>*,.c-body>.blk[data-type="tool"]>*{max-width:100%}
+.s-body>.reason>*,.c-body>.reason>*{max-width:100%}
+.children{margin-top:4px}
+/* ── 子代理时间线 + context 健康（M17） ───────────────── */
+.tl{margin:12px 0 4px;padding:10px 12px;border:1px solid var(--rule);border-radius:6px;background:rgba(255,255,255,.015)}
+.tl-h{display:flex;justify-content:space-between;font:11px var(--mono);color:var(--muted);margin-bottom:8px;letter-spacing:.02em}
+.tl-row{display:flex;align-items:center;gap:10px;margin:4px 0;font:11px var(--mono)}
+.tl-name{flex:0 0 118px;color:var(--chalk);opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tl-track{flex:1;height:10px;background:var(--rule);border-radius:5px;position:relative;overflow:hidden}
+.tl-bar{position:absolute;top:0;bottom:0;border-radius:5px;background:var(--muted)}
+.tl-bar.on{background:var(--signal);animation:tlpulse 1.6s ease-in-out infinite}
+.tl-bar.err{background:var(--err)}
+.tl-meta{flex:0 0 auto;color:var(--muted);white-space:nowrap;font-variant-numeric:tabular-nums}
+@keyframes tlpulse{0%,100%{opacity:1}50%{opacity:.45}}
+.s-ctx{font:10px var(--mono);color:var(--muted);border:1px solid var(--rule);border-radius:9px;padding:0 7px;line-height:15px;white-space:nowrap;font-variant-numeric:tabular-nums;align-self:center}
+.s-ctx.warn{color:#d9b36a;border-color:#7d5f26}
+.s-ctx.hot{color:#d96a6a;border-color:#7d3126}
+/* ── 主页（落地页，M18）────────────────── */
+#home{max-width:calc(var(--acw) + 96px);margin:0 auto;padding:7vh 8px 40px;animation:homein .18s ease-out}
+@keyframes homein{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+.home-kicker{font:11px var(--mono);color:var(--signal);letter-spacing:.15em}
+.home-head h1{font-size:23px;line-height:1.5;font-weight:560;color:var(--chalk);margin:11px 0 26px;letter-spacing:-.01em;max-width:24em}
+.home-hero{border:1px solid var(--rule2);border-radius:8px;padding:16px 18px 15px;cursor:pointer;transition:border-color .15s ease,background .15s ease;background:linear-gradient(180deg,rgba(87,224,194,.035),transparent 72%)}
+.home-hero:hover{border-color:var(--signal);background-color:rgba(87,224,194,.025)}
+.hh-top{display:flex;justify-content:space-between;gap:12px;align-items:baseline}
+.hh-kicker{font:10.5px var(--mono);color:var(--muted);letter-spacing:.1em}
+.hh-time{font:10.5px var(--mono);color:var(--rule2)}
+.hh-title{font-size:18px;font-weight:560;color:var(--chalk);margin:9px 0 11px;line-height:1.4}
+.hh-meta{display:flex;gap:12px;flex-wrap:wrap;font:10.5px var(--mono);color:var(--muted)}
+.home-live{color:var(--signal)}
+.home-live::before{content:'●';margin-right:5px;animation:tlpulse 1.6s ease-in-out infinite}
+.home-sub{font:10.5px var(--mono);color:var(--muted);letter-spacing:.1em;margin:30px 0 4px}
+.home-list{list-style:none;margin:0;padding:0;border-top:1px solid var(--rule)}
+.home-list li{display:flex;gap:12px;align-items:baseline;padding:11px 2px;border-bottom:1px solid var(--rule);cursor:pointer}
+.home-list li:hover{background:rgba(255,255,255,.015)}
+.home-list li:hover .hl-title{color:var(--chalk)}
+.hl-title{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13px;color:var(--muted)}
+.hl-meta,.hl-kids{font:10px var(--mono);color:var(--rule2);white-space:nowrap}
+.home-foot{margin-top:24px;font:10.5px var(--mono);color:var(--rule2);line-height:1.7}
+.home-loading{padding:9vh 0;color:var(--muted);font:12px var(--mono)}
+/* 会话内快照身份条 */
+.snap-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:0 0 16px;padding:7px 12px;border:1px solid var(--rule2);border-radius:6px;background:rgba(255,255,255,.02);font:10.5px var(--mono);color:var(--muted)}
+.snap-bar b{color:var(--chalk);font-weight:600}
+.snap-bar .snap-warn{color:#d9a65a}
+.snap-bar .snap-live{color:var(--signal)}
+
+/* ── 长会话性能：视口外的消息跳过布局和绘制 ─────────────────
+   实测（1607 条消息 / 6049 个 part / 7.5 万 DOM 节点）：
+     拖宽度滑块每档阻塞主线程 540~612ms —— 滑块是 input 事件，连拖就是连续半秒卡死；
+     加上下面两行后降到 17~19ms（降 30 倍），首次布局也从 911ms 掉到 200ms 上下。
+   为什么不用真虚拟滚动（TanStack Virtual 那种只渲染可视区）：
+     它会把没渲染的消息从 DOM 里摘掉，我们的会话内 Ctrl+F、跨会话全文搜索跳转、
+     术语选词都依赖消息节点在 DOM 里；content-visibility 只是"不画"，文本 selectable、
+     可被 find 命中，DOM 结构原封不动 —— 这是 chat-ui / hermes-desktop 都在用的折中。
+   contain-intrinsic-size 的 auto 关键字：浏览器记住该块上次渲染的真实高度，
+   滚回去时占位高度准，不会出现滚动条跳动。 */
+.rp,.msg,.tgroup{content-visibility:auto;contain-intrinsic-size:auto 160px}
+
+/* ── 消息：纯排版层级，没有气泡 ───────────────────────── */
+.msg{margin:20px 0}
+.msg:first-child{margin-top:4px}
+.msg-tag{
+  font:11px var(--mono);color:var(--muted);margin-bottom:5px;
+  display:flex;align-items:center;gap:9px;
+}
+.msg-tag::after{content:'';flex:1;height:1px;background:var(--rule)}
+/* 连续同一角色时不重复"AI 回复"，只在角色切换时出现一次 */
+.msg.same>.msg-tag{display:none}
+.msg.same{margin-top:8px}
+.msg.you .msg-tag{color:var(--muted)}
+.msg.ai  .msg-tag{color:var(--muted)}
+/* 消息级操作：hover 消息才浮出（复制全文 / 编辑重发） */
+.msg-acts{display:flex;gap:6px;opacity:0;transition:opacity .12s ease;margin-left:4px}
+.msg:hover>.msg-tag .msg-acts,.msg:focus-within>.msg-tag .msg-acts{opacity:1}
+.msg-acts button{background:none;border:0;color:var(--rule2);font:10.5px var(--mono);cursor:pointer;padding:0 2px;border-radius:3px}
+.msg-acts button:hover{color:var(--chalk)}
+.msg-acts button[data-done]{color:var(--md-code)}
+
+/* 消息大纲侧条：每个用户提问一个刻度，点击跳转（借鉴 opencode message-nav.tsx） */
+#msgNav{
+  position:fixed;right:6px;top:50%;transform:translateY(-50%);z-index:40;
+  display:flex;flex-direction:column;gap:3px;align-items:flex-end;
+}
+.mnav-item{
+  width:16px;height:16px;display:flex;align-items:center;justify-content:flex-end;
+  background:none;border:0;cursor:pointer;padding:0;
+}
+.mnav-item::after{content:'';width:9px;height:2px;border-radius:1px;background:var(--rule2);transition:all .12s ease}
+.mnav-item:hover::after{width:14px;background:var(--muted)}
+.mnav-item.on::after{width:16px;height:3px;background:var(--signal)}
+.mnav-item .mnav-tip{
+  position:absolute;right:22px;top:50%;transform:translateY(-50%);
+  background:var(--slab3);border:1px solid var(--rule2);border-radius:5px;padding:4px 9px;
+  font:11px var(--sans);color:var(--chalk);white-space:nowrap;max-width:300px;overflow:hidden;
+  text-overflow:ellipsis;opacity:0;pointer-events:none;transition:opacity .12s;
+  box-shadow:0 8px 24px rgba(0,0,0,.5);
+}
+.mnav-item:hover .mnav-tip{opacity:1}
+#msgNav:not(:empty){display:flex}
+
+/* ── 内容宽度面板（F6，形态参考 Obsidian Readable line length）── */
+#widthBtn.on{color:var(--chalk)}
+#widthPanel{
+  position:fixed;top:48px;right:120px;z-index:75;width:270px;
+  background:var(--slab2);border:1px solid var(--rule2);border-radius:10px;padding:14px 16px;
+  box-shadow:0 20px 50px rgba(0,0,0,.55);
+}
+#widthPanel[hidden]{display:none}
+.wp-title{font-size:12px;font-weight:600;color:var(--chalk);margin-bottom:10px;display:flex;justify-content:space-between}
+.wp-title b{font:11px var(--mono);color:var(--signal);font-weight:400}
+#wpRange{width:100%;accent-color:var(--signal);cursor:pointer}
+.wp-scale{display:flex;justify-content:space-between;font:10px var(--mono);color:var(--rule2);margin-top:4px}
+.wp-hint{font:10.5px var(--mono);color:var(--muted);margin-top:9px;line-height:1.7}
+.wp-hint kbd{background:var(--slab3);border:1px solid var(--rule);border-radius:3px;padding:0 5px}
+#wpReset{background:none;border:1px solid var(--rule);border-radius:4px;color:var(--muted);font:10.5px var(--mono);padding:2px 8px;cursor:pointer;margin-top:10px}
+#wpReset:hover{color:var(--chalk);border-color:var(--rule2)}
+
+/* ── 术语卡片（选词 → 子 Agent 讲解）───────────────── */
+/* 交互：拖选/双击任意词 → 浮出「解释这个词」→ 点击 → 后端起一个临时会话问一句（用完即删）。
+   静止时不干扰阅读（Obendorf links-on-demand 结论）。 */
+.sel-pop{
+  position:fixed;z-index:56;background:var(--slab3);border:1px solid var(--rule2);
+  border-radius:6px;padding:5px 10px;box-shadow:0 10px 28px rgba(0,0,0,.55);
+  font:11.5px var(--sans);color:var(--chalk);cursor:pointer;display:flex;align-items:center;gap:6px;
+}
+.sel-pop:hover{border-color:var(--signal-dim)}
+.sel-pop::after{content:'';position:absolute;bottom:-4px;left:50%;margin-left:-4px;
+  width:8px;height:8px;background:var(--slab3);border-right:1px solid var(--rule2);
+  border-bottom:1px solid var(--rule2);transform:rotate(45deg)}
+.sel-pop:hover::after{border-color:var(--signal-dim)}
+#termCard{
+  position:fixed;top:60px;right:16px;bottom:16px;width:360px;z-index:58;
+  background:var(--slab2);border:1px solid var(--rule2);border-radius:10px;
+  box-shadow:0 20px 50px rgba(0,0,0,.55);display:flex;flex-direction:column;overflow:hidden;
+}
+#termCard[hidden]{display:none}
+.tc-head{display:flex;align-items:baseline;gap:8px;padding:13px 15px;border-bottom:1px solid var(--rule);flex:none}
+.tc-title{font-size:15px;font-weight:600;color:var(--chalk);flex:1;min-width:0;word-break:break-word}
+.tc-close{background:none;border:0;color:var(--rule2);font-size:16px;cursor:pointer;padding:0 3px;line-height:1}
+.tc-close:hover{color:var(--chalk)}
+.tc-ctx{padding:8px 15px;font:11px/1.5 var(--mono);color:var(--rule2);border-bottom:1px solid var(--rule);flex:none;
+  max-height:56px;overflow:hidden;text-overflow:ellipsis}
+.tc-body{flex:1;overflow-y:auto;padding:13px 15px;font:13px/1.75 var(--sans);color:var(--chalk)}
+.tc-body .md p{margin:.5em 0}
+.tc-loading{color:var(--muted);font-size:12px;display:flex;align-items:center;gap:8px}
+.tc-loading::before{content:'';width:10px;height:10px;border-radius:50%;background:var(--signal);
+  animation:tcspin 1s linear infinite;flex:none}
+@keyframes tcspin{to{transform:rotate(360deg)}}
+.tc-src{font:10px var(--mono);color:var(--rule2);margin-top:8px;padding-top:6px;border-top:1px solid var(--rule)}
+.tc-foot{border-top:1px solid var(--rule);padding:10px 15px;flex:none;display:flex;gap:8px}
+.tc-foot input{flex:1;background:var(--slab);border:1px solid var(--rule);border-radius:4px;color:var(--chalk);padding:6px 10px;font-size:12px}
+.tc-foot input:focus{outline:none;border-color:var(--signal-dim)}
+.tc-pin{background:var(--slab2);border:1px solid var(--rule2);border-radius:4px;color:var(--muted);font:11px var(--mono);padding:4px 10px;cursor:pointer}
+.tc-pin.on{color:var(--signal);border-color:var(--signal-dim)}#keysPanel{
+  position:fixed;inset:0;z-index:80;display:flex;align-items:center;justify-content:center;
+  background:rgba(0,0,0,.55);backdrop-filter:blur(2px);
+}
+#keysPanel[hidden]{display:none}
+.keys-box{
+  background:var(--slab2);border:1px solid var(--rule2);border-radius:10px;padding:18px 22px;
+  min-width:330px;box-shadow:0 24px 60px rgba(0,0,0,.6);
+}
+.keys-box h3{margin:0 0 12px;font-size:13px;font-weight:600;color:var(--chalk)}
+.keys-row{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:4px 0;font-size:12px;color:var(--muted)}
+.keys-row kbd{
+  font:11px var(--mono);background:var(--slab3);border:1px solid var(--rule2);border-radius:4px;
+  padding:1px 7px;color:var(--chalk);white-space:nowrap;
+}
+#toLatest{
+  position:fixed;right:26px;bottom:88px;z-index:45;
+  background:var(--slab2);border:1px solid var(--rule2);border-radius:20px;padding:6px 14px;
+  font:11.5px var(--mono);color:var(--chalk);cursor:pointer;
+  box-shadow:0 8px 24px rgba(0,0,0,.5);display:flex;align-items:center;gap:6px;
+}
+#toLatest[hidden]{display:none}
+#toLatest:hover{border-color:var(--signal-dim);color:var(--signal)}
+/* 你发的消息左侧加一道淡竖线，一眼分清谁说的（不用背景色块） */
+/* 你的消息：独立浅色块，一眼和 AI 区分开（聊天界面的核心分组信号）
+   宽度必须跟着 --acw 走，这里试错过两轮：
+   - 第一版 max-width:72ch 写死 → 气泡比正文列窄，右边空一大块，看着像位置错了
+   - 第二版 min(var(--acw),72ch) + margin-left:auto → 宽度卡在 72ch，
+     拖滑块时气泡**不变宽、只往右跑**，左边的空档越拖越大（用户实测反馈）
+   现在的写法：width:fit-content 让短消息是小气泡、长的撑满，
+   max-width:var(--acw) 保证长消息正好填满正文列（和 AI 文字同一列宽，滑块直接生效），
+   再用 calc 扣掉气泡自己的 padding+border，否则会比正文列宽出一截。
+   圆角改成四角一致 —— 12 12 12 4 那种单边尖角是给"独立气泡"写的，
+   撑满整列之后它会变成一个莫名其妙的小缺口。 */
+.msg.you .msg-body{
+  background:var(--slab2);
+  border:1px solid var(--rule);
+  border-radius:12px;
+  padding:10px 14px;
+  width:fit-content;max-width:calc(var(--acw) - 28px);
+}
+/* AI 的消息：纯文本 + 大留白，不加底色（免得整屏都是色块）
+   这里曾漏写 var(--acw) 留了 82ch 硬上限，导致滑块拉到 92ch 以上正文就不再变宽 */
+.msg.ai .msg-body{max-width:var(--acw)}
+.msg-body{font-size:15px;line-height:1.7;color:var(--chalk)}
+
+.blk.msg-body{border:0;padding:0}
+.blk.plain,.rtext.plain{white-space:pre-wrap}
+.tl-row[data-sid]{cursor:pointer}
+.tl-row[data-sid]:hover .tl-name{color:var(--chalk)}
+.tl-right{display:flex;gap:10px;align-items:baseline}
+.tl-right .ghost.sm{font-size:10px;padding:1px 6px}
+/* 正文是这一轮的答案，要和上面的思考/工具日志拉开距离 */
+.blk[data-type="text"]{margin-top:16px}
+.msg:first-child>.blk[data-type="text"]{margin-top:2px}
+
+/* ── 思考过程：默认收起，展开后明确是次要信息 ─────────── */
+.reason{margin:8px 0}
+.reason>summary{
+  list-style:none;cursor:pointer;
+  display:flex;align-items:baseline;gap:9px;
+  font:11.5px var(--mono);color:var(--muted);
+  padding:3px 0;user-select:none;max-width:100%;
+}
+.reason>summary>span:first-of-type{flex:none}
+.reason>summary::-webkit-details-marker{display:none}
+.reason>summary::before{content:'▸';font-size:9px;transition:transform .12s;color:var(--rule2)}
+.reason[open]>summary::before{transform:rotate(90deg)}
+.reason>summary:hover{color:var(--chalk)}
+.reason .lang{color:var(--rule2)}
+.reason>summary:hover .lang{color:var(--muted)}
+.reason .dur{font-variant-numeric:tabular-nums;color:var(--rule2)}
+/* 思考文本：比正文窄、字号更小，是刻意压低的辅助信息，不跟滑块放大；
+   但用 min() 夹住，窄档（60ch）时不会反过来溢出正文列 */
+.rtext{
+  margin:7px 0 4px;padding:2px 0 2px 14px;
+  border-left:1px solid var(--rule);
+  font-size:12px;line-height:1.7;color:var(--muted);
+  max-width:min(var(--acw),88ch);
+}
+
+/* ── 派活块 ────────────────────────────────────────────── */
+.dispatch{
+  margin:10px 0;padding:8px 14px;
+  border-left:2px solid var(--signal);
+  background:rgba(87,224,194,.045);
+}
+.d-head{font:11px var(--mono);color:var(--signal);margin-bottom:4px}
+.d-body{font-size:12.5px;color:var(--muted);white-space:pre-wrap;line-height:1.6}
+
+/* ── 工具调用：单行等宽，不是 chip ─────────────────────── */
+.tool{
+  display:flex;align-items:baseline;gap:8px;
+  font:11.5px/1.55 var(--mono);color:var(--muted);
+  padding:2px 0;max-width:100%;min-width:0;
+}
+.tool>.t-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1}
+.tool>.t-st{flex:none;color:var(--rule2)}
+.st{width:5px;height:5px;border-radius:50%;background:var(--rule2);flex:none}
+.st.completed{background:var(--rule2)}
+.st.running{background:var(--signal);animation:pulse 1.1s ease-in-out infinite}
+.st.error{background:var(--err)}
+.st.pending{background:var(--rule2)}
+.tool .el{font-variant-numeric:tabular-nums}
+.tool.task{color:var(--chalk)}
+
+/* ── 工具折叠组（精简模式）────────────────────────── */
+.tgroup{margin:2px 0;border-left:1px solid var(--rule)}
+.tgroup>summary{
+  list-style:none;cursor:pointer;display:flex;align-items:baseline;gap:7px;
+  font:11.5px/1.6 var(--mono);color:var(--muted);
+  padding:2px 6px;border-radius:4px;user-select:none;
+}
+.tgroup>summary::-webkit-details-marker{display:none}
+.tgroup>summary:hover{color:var(--chalk);background:var(--slab2)}
+.tgroup .tg-arrow{display:inline-block;color:var(--rule2);transition:transform .15s var(--ease)}
+.tgroup[open]>summary .tg-arrow{transform:rotate(90deg)}
+.tgroup .tg-body{padding:2px 0 2px 12px}
+/* 精简模式下隐藏 todowrite（opencode 官方同样整体隐藏内部待办） */
+body.compact .blk[data-tool-name="todowrite"]{display:none}
+
+/* ── 工具 diff 卡 / 错误卡（F1）───────────────────── */
+.tdiff{margin:3px 0 6px;border:1px solid var(--rule);border-radius:5px;overflow:hidden;max-width:100%}
+.tdiff-head{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--slab2);padding:3px 10px;font:11px var(--mono)}
+.tdiff-file{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tdiff-stat{flex:none;font-variant-numeric:tabular-nums}
+.tdiff-stat .add{color:var(--md-code);font-weight:600}
+.tdiff-stat .del{color:var(--err);font-weight:600}
+.tdiff-body{margin:0;padding:6px 0;font:11.5px/1.55 var(--mono);overflow-x:auto;background:var(--slab)}
+.tdiff-body .dl{display:block;padding:0 10px;white-space:pre}
+.dl.add{background:rgba(127,216,143,.09);color:#9FE3AF}
+.dl.del{background:rgba(224,107,98,.09);color:#E59892}
+.dl.ctx{color:var(--muted)}
+.dl.gap{color:var(--rule2);text-align:center;letter-spacing:2px;padding:1px 0}
+.tdiff-more>summary{color:var(--rule2);text-align:center;letter-spacing:2px;padding:1px 0;cursor:pointer;list-style:none;font-size:10.5px}
+.tdiff-more>summary::-webkit-details-marker{display:none}
+.tdiff-more>summary:hover{color:var(--muted)}
+.terr{margin:3px 0 6px;border:1px solid rgba(224,107,98,.35);border-left:2px solid var(--err);border-radius:0 5px 5px 0;background:rgba(224,107,98,.05);max-width:100%;position:relative}
+.terr-head{padding:4px 10px;font:11px var(--mono);color:var(--err)}
+.terr-body{margin:0;padding:0 10px 8px;font:11.5px/1.55 var(--mono);color:#D9A9A4;white-space:pre-wrap;word-break:break-word}
+.terr-copy{position:absolute;top:4px;right:6px;opacity:1}
+@media (prefers-reduced-motion:reduce){.st.running{animation:none}}
+.warn-stuck{font:11px var(--mono);color:var(--warn);margin-left:4px;white-space:nowrap;cursor:pointer;text-decoration:underline dotted}
+.warn-stuck:empty{display:none}
+
+/* ── Markdown ─────────────────────────────────────────── */
+.md p,.rtext p{margin:.5em 0}
+.md p:first-child,.rtext p:first-child{margin-top:0}
+.md p:last-child,.rtext p:last-child{margin-bottom:0}
+.md h3,.md h4,.md h5,.md h6,.rtext h3,.rtext h4,.rtext h5,.rtext h6{
+  margin:1.3em 0 .5em;font-weight:600;line-height:1.4;color:var(--md-heading);
+}
+/* 层级拉开（对齐 opencode session-ui 的"前两级突出，后面弱化"思路）：
+   h3=# 主标题 / h4=## 章节 / h5=### 小节 / h6 次要 */
+.md h3,.rtext h3{font-size:1.32em;margin:1.6em 0 .55em;text-decoration:underline;text-decoration-color:rgba(157,124,216,.35);text-underline-offset:5px}
+.md h4,.rtext h4{font-size:1.16em;margin:1.4em 0 .5em}
+.md h5,.rtext h5{font-size:1.04em}
+.md h6,.rtext h6{font-size:.95em;color:color-mix(in srgb, var(--md-heading) 60%, var(--muted))}
+.md>*:first-child{margin-top:0}
+.md ul,.md ol,.rtext ul,.rtext ol{margin:.45em 0;padding-left:1.45em}
+.md li,.rtext li{margin:.2em 0}
+.md li>p,.rtext li>p{margin:.2em 0}
+.md li>p:first-child{margin-top:0}
+.md li>p:last-child{margin-bottom:0}
+.md li>ul,.md li>ol,.rtext li>ul,.rtext li>ol{margin:.18em 0}
+.md ul>li::marker{color:var(--md-list)}
+.md ol>li::marker{color:var(--md-enum);font-family:var(--mono);font-size:.9em}
+.md blockquote,.rtext blockquote{
+  margin:.7em 0;padding:.1em 0 .1em 1em;
+  border-left:1px solid rgba(229,192,123,.4);color:var(--md-quote);
+}
+.md blockquote p,.rtext blockquote p{margin:.25em 0}
+.md hr,.rtext hr{border:0;border-top:1px solid var(--rule);margin:1.4em 0}
+.md code,.rtext code{
+  background:var(--slab2);border:1px solid var(--rule);border-radius:3px;
+  padding:.05em .35em;font-family:var(--mono);font-size:.88em;color:var(--md-code);
+}
+.md-pre{
+  background:var(--slab);border:1px solid var(--rule);border-left:2px solid var(--rule2);
+  border-radius:0 4px 4px 0;padding:10px 13px;overflow-x:auto;margin:.7em 0;
+  font-size:12px;line-height:1.6;
+}
+.md-pre code{background:none;border:0;padding:0;font-size:12px;white-space:pre;color:#C9D6E2}
+/* 代码块头部栏：语言徽章 + 复制按钮（复制按钮的 hover 出现照 opencode markdown.css） */
+.md-code{position:relative;margin:.7em 0;max-width:100%}
+.md-code .md-pre{margin:0;border-radius:0 0 4px 4px}
+.md-codebar{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  background:var(--slab2);border:1px solid var(--rule);border-bottom:0;border-radius:4px 4px 0 0;
+  padding:3px 8px 3px 10px;
+}
+.md-lang{display:inline-block;font:10px var(--mono);letter-spacing:.06em;text-transform:uppercase;padding:1px 7px;border-radius:3px;background:var(--slab3)}
+/* 语言徽章配色（尽量贴近常见约定，暗色下调低饱和度） */
+.md-lang[data-l="bash"],.md-lang[data-l="sh"],.md-lang[data-l="shell"],.md-lang[data-l="zsh"]{color:#56B6C2}
+.md-lang[data-l="js"],.md-lang[data-l="ts"],.md-lang[data-l="jsx"],.md-lang[data-l="tsx"],.md-lang[data-l="javascript"],.md-lang[data-l="typescript"]{color:#E5C07B}
+.md-lang[data-l="py"],.md-lang[data-l="python"]{color:#61AFCA}
+.md-lang[data-l="json"],.md-lang[data-l="jsonc"]{color:#7FD88F}
+.md-lang[data-l="css"],.md-lang[data-l="html"],.md-lang[data-l="vue"]{color:#C678DD}
+.md-lang:not([data-l]){display:none}
+.md-copy{
+  opacity:0;transition:opacity .15s ease;border:1px solid var(--rule);border-radius:3px;
+  background:none;color:var(--muted);font:10.5px var(--mono);padding:1px 7px;cursor:pointer;
+}
+.md-code:hover .md-copy,.md-copy:focus-visible{opacity:1}
+.md-copy:hover{color:var(--chalk);border-color:var(--rule2)}
+.md-copy[data-copied="1"]{opacity:1;color:var(--md-code);border-color:var(--md-code)}
+/* 轻量语法高亮（F4，自写 tokenizer）：关键字青/字符串绿/注释灰/数字橙/flag 黄 */
+.md-pre .tk-k{color:var(--md-enum)}
+.md-pre .tk-s{color:var(--md-code)}
+.md-pre .tk-c{color:var(--muted);font-style:italic}
+.md-pre .tk-n{color:var(--md-strong)}
+.md-pre .tk-f{color:var(--md-emph)}
+.md a,.rtext a{color:var(--signal);text-decoration:none;border-bottom:1px solid var(--signal-dim);word-break:break-all}
+.md a:hover,.rtext a:hover{border-bottom-color:var(--signal)}
+.md strong,.rtext strong{font-weight:650;color:var(--md-strong)}
+.md em,.rtext em{font-style:italic;color:var(--md-emph)}
+.md del,.rtext del{opacity:.55}
+.md input[type=checkbox]{margin-right:.4em;vertical-align:middle;accent-color:var(--signal)}
+/* 已完成的任务整行降透明，已完成/未完成一眼可分 */
+.md li:has(input[type=checkbox]:checked){opacity:.55}
+.md-tw{overflow-x:auto;margin:.7em 0;max-width:100%}
+.md table{border-collapse:collapse;font-size:.93em;width:auto;min-width:min(100%,380px)}
+.md th,.md td{
+  border-bottom:1px solid var(--rule);padding:6px 14px 6px 0;
+  text-align:left;vertical-align:top;
+  word-break:break-word;overflow-wrap:anywhere;line-height:1.6;
+}
+.md th:first-child,.md td:first-child{white-space:nowrap}
+.md th{color:var(--muted);font-weight:600;font-size:.94em;border-bottom-color:var(--rule2)}
+.md th:not(:last-child),.md td:not(:last-child){border-right:1px solid var(--rule);padding-right:14px}
+.md tbody tr:nth-child(even){background:rgba(255,255,255,.015)}
+.md tbody tr:hover{background:rgba(148,163,184,.04)}
+
+/* ── 底栏：输入区是唯一的"实体"面 ───────────────────── */
+footer{
+  flex:none;display:flex;align-items:flex-end;gap:10px;
+  border-top:1px solid var(--rule);background:var(--graphite);
+  justify-content:center;
+  /* 用 padding 把输入行精确对齐到会话列（= 92ch + 会话卡 padding），
+     窄屏时退化为 20px 普通内边距 */
+  padding:12px max(20px, calc((100% - var(--acw) - 64px) / 2 + 22px)) 14px;
+}
+#in{
+  flex:1;background:var(--slab);border:1px solid var(--rule);border-radius:6px;
+  padding:9px 12px;font:14px/1.6 var(--sans);resize:none;height:38px;
+  max-height:34vh;color:var(--chalk);
+}
+#in:focus{outline:none;border-color:var(--rule2)}
+#in::placeholder{color:var(--rule2)}
+footer .act,#footer-btns{align-self:flex-end}
+#footer-btns{display:flex;gap:6px}
+.hint{font:10.5px var(--mono);color:var(--rule2);white-space:nowrap;padding-bottom:6px}
+
+/* ── 悬浮层：唯一允许有阴影的地方 ─────────────────────── */
+.drawer{
+  position:fixed;top:0;right:0;bottom:0;width:min(760px,94vw);z-index:40;
+  background:var(--slab);border-left:1px solid var(--rule2);
+  display:flex;flex-direction:column;transform:translateX(100%);
+  transition:transform .18s ease;box-shadow:-24px 0 60px rgba(0,0,0,.5);
+}
+.drawer.open{transform:none}
+@media (prefers-reduced-motion:reduce){.drawer{transition:none}}
+.dw-head{
+  display:flex;gap:10px;align-items:center;padding:11px 14px;
+  border-bottom:1px solid var(--rule);flex:none;
+}
+.dw-head b{font-size:13px;font-weight:600}
+.dw-head input{
+  flex:1;background:var(--slab);border:1px solid var(--rule);border-radius:4px;
+  color:var(--chalk);padding:4px 9px;font:11.5px var(--mono);
+}
+.dw-head input:focus{outline:none;border-color:var(--rule2)}
+.dw-body{overflow:auto;flex:1;padding:12px 14px}
+.dw-detail{position:absolute;inset:0;background:var(--graphite);display:flex;flex-direction:column}
+.dw-detail[hidden]{display:none}
+.dw-list{list-style:none;margin:0;padding:0}
+.dw-list li{
+  padding:9px 11px;border:1px solid var(--rule);border-radius:5px;
+  margin-bottom:5px;cursor:pointer;background:var(--slab);
+  transition:border-color .12s;
+}
+.dw-list li:hover{border-color:var(--rule2)}
+.dw-list li.child{margin-left:26px;background:transparent}
+.dw-t{font-size:13.5px;font-weight:600;margin-bottom:3px;line-height:1.45}
+.dw-m{font:11px var(--mono);color:var(--muted);display:flex;gap:11px;align-items:center;flex-wrap:wrap}
+.dw-load{margin-left:auto}
+.dw-tag{padding:0 5px;border:1px solid var(--rule);border-radius:3px;color:var(--muted)}
+.dw-note{font-size:11px;color:var(--muted);line-height:1.8;padding:6px 2px 12px}
+.dw-note code{background:var(--slab2);padding:1px 5px;border-radius:3px;font-family:var(--mono)}
+/* ── 历史抽屉：全文搜索（G）────────────────────────── */
+.dw-searchbar{display:flex;align-items:center;gap:6px;padding:8px 12px;border-bottom:1px solid var(--rule);flex:none}
+.dw-searchbar input{flex:1;background:var(--slab);border:1px solid var(--rule);border-radius:4px;color:var(--chalk);padding:5px 9px;font-size:12.5px;min-width:0}
+.dw-searchbar input:focus{outline:none;border-color:var(--signal-dim)}
+.dw-searchmode{
+  flex:none;background:none;border:1px solid var(--rule);border-radius:4px;
+  font:10.5px var(--mono);color:var(--muted);padding:3px 8px;cursor:pointer;white-space:nowrap;
+}
+.dw-searchmode.on{background:var(--slab2);color:var(--signal);border-color:var(--signal-dim)}
+.dw-searchstat{flex:none;font:10.5px var(--mono);color:var(--rule2);min-width:56px;text-align:right}
+.hit{padding:9px 12px;border-bottom:1px solid var(--rule);cursor:pointer}
+.hit:hover{background:var(--slab2)}
+.hit-h{display:flex;align-items:baseline;gap:8px;margin-bottom:4px}
+.hit-t{font-size:12.5px;color:var(--chalk);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+.hit-role{flex:none;font:9.5px var(--mono);color:var(--rule2);border:1px solid var(--rule2);border-radius:3px;padding:0 4px}
+.hit-s{font:11.5px/1.65 var(--sans);color:var(--muted);word-break:break-word;white-space:pre-wrap}
+.hit-s mark{background:rgba(245,167,66,.3);color:var(--chalk);border-radius:2px;padding:0 2px}
+.hit-x{font:10px var(--mono);color:var(--rule2);margin-top:4px}
+.rp{padding:12px 0;border-bottom:1px solid var(--rule)}
+.rp-head{font:11px var(--mono);color:var(--muted);margin-bottom:7px;display:flex;gap:12px;flex-wrap:wrap}
+.rp-body .msg{margin:7px 0}
+.rp-body .rtext{font-size:12px;color:var(--muted);max-width:none}
+.rp-txt{font-size:14px;line-height:1.72}
+.dw-foot{padding:10px 14px;border-top:1px solid var(--rule);display:flex;gap:9px;align-items:center;flex:none;flex-wrap:wrap}
+.dw-foot input{flex:1;min-width:160px;background:var(--slab);border:1px solid var(--rule);border-radius:4px;color:var(--chalk);padding:6px 10px;font-size:12.5px}
+.dw-foot input:focus{outline:none;border-color:var(--rule2)}
+.dw-foot select{background:var(--slab);border:1px solid var(--rule);border-radius:4px;color:var(--chalk);padding:5px 6px;font:11.5px var(--mono);max-width:190px}
+.dw-foot .seg{flex:none}
+
+/* ── 面板 ─────────────────────────────────────────────── */
+.subpanel{
+  position:fixed;top:44px;right:14px;z-index:45;width:340px;
+  background:var(--slab3);border:1px solid var(--rule2);border-radius:12px;
+  box-shadow:0 0 0 1px rgba(255,255,255,.04),0 20px 50px rgba(0,0,0,.55),0 4px 14px rgba(0,0,0,.4);padding:14px;
+}
+.subpanel.wide{width:440px}
+.subpanel[hidden]{display:none}
+/* 截图管理面板：对齐信号台的字体和颜色（DaisyUI 默认的不一样，得压掉） */
+#shotsPanel .card{background:var(--slab);border:1px solid var(--rule2);color:var(--chalk);
+  font:14px/1.6 var(--sans);box-shadow:0 18px 44px rgba(0,0,0,.45)}
+#shotsPanel .card-title{font-size:13px;font-weight:600;color:var(--chalk);margin-bottom:2px}
+#shotsPanel .text-xs{font-size:11px;font-family:var(--mono)}
+#shotsPanel .opacity-60{opacity:1;color:var(--muted)}
+#shotsPanel .opacity-70{opacity:1;color:var(--muted)}
+#shotsPanel .opacity-50{opacity:.5}
+#shotsPanel .badge{font-family:var(--mono);font-size:11px;font-weight:600;border-radius:4px;
+  min-height:0;height:auto;padding:2px 8px}
+#shotsPanel .badge-lg{font-size:11px}
+#shotsPanel .badge-primary{background:var(--signal-dim);color:#fff;border-color:transparent}
+#shotsPanel .badge-neutral{background:var(--slab2);color:var(--muted);border-color:var(--rule)}
+#shotsPanel .btn{font-family:var(--sans);font-size:11.5px;min-height:0;height:auto;
+  padding:5px 12px;border-radius:4px}
+#shotsPanel .border-base-300{border-color:var(--rule)}
+
+.sp-title{font-size:12.5px;font-weight:600;margin-bottom:5px}
+.sp-note{font-size:11px;color:var(--muted);line-height:1.65;margin-bottom:11px}
+.sp-row{display:flex;align-items:center;gap:11px;margin-bottom:8px}
+.sp-row>span{width:118px;font-size:12px;display:flex;flex-direction:column}
+.sp-row>span i{font-style:normal;font-size:10px;color:var(--rule2)}
+.sp-row select{flex:1;min-width:0;max-width:none}
+.sp-warn{font-size:11px;color:var(--warn);border-left:2px solid var(--warn);padding:2px 0 2px 9px;margin:5px 0 9px;line-height:1.6}
+.sp-warn[hidden]{display:none}
+.sp-foot{display:flex;align-items:center;gap:9px;margin-top:5px}
+.sp-state{flex:1;font:11px var(--mono);color:var(--muted)}
+
+.ev-sec{font-size:11.5px;font-weight:600;color:var(--muted);margin:13px 0 6px;display:flex;align-items:center;gap:8px}
+.ev-count{font:10px var(--mono);color:var(--rule2);font-weight:400}
+.ev-list{display:flex;flex-direction:column;gap:4px;max-height:220px;overflow:auto}
+.ev-item{display:flex;gap:10px;align-items:flex-start;padding:7px 9px;background:var(--graphite);border:1px solid var(--rule);border-radius:5px}
+.ev-dot{width:5px;height:5px;border-radius:50%;margin-top:6px;flex:none;background:var(--rule2)}
+.ev-dot.on{background:var(--signal)}
+.ev-dot.off{background:var(--err)}
+.ev-dot.warn{background:var(--warn)}
+.ev-main{flex:1;min-width:0}
+.ev-name{font:12px var(--mono);font-weight:600}
+.ev-desc{font-size:11px;color:var(--muted);line-height:1.55;margin-top:2px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.ev-tag{font:10px var(--mono);color:var(--rule2);white-space:nowrap;padding-top:2px}
+
+/* ── 杂项 ─────────────────────────────────────────────── */
+.outbar{
+  display:flex;align-items:center;gap:10px;margin:10px auto 0;max-width:1080px;padding:6px 11px;
+  border-left:2px solid var(--signal);background:rgba(87,224,194,.05);
+  font:11.5px var(--mono);color:var(--muted);
+}
+.outbar[hidden]{display:none}
+/* 钉住条标题过长时省略号截断，不要从半个字中间硬切 */
+.outbar .ob-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.ob-name{color:var(--chalk);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:50%;font-weight:600}
+.ob-meta{color:var(--rule2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+#banner{max-width:1040px;margin:12px auto;padding:0 2px;font-size:12.5px;color:var(--warn)}
+#banner:not(:empty){border-left:2px solid var(--warn);padding-left:12px}
+#toast{
+  position:fixed;left:50%;bottom:82px;transform:translateX(-50%);
+  background:var(--slab2);border:1px solid var(--rule2);border-radius:5px;
+  padding:8px 15px;font-size:12px;color:var(--chalk);z-index:60;display:none;pointer-events:none;
+  max-width:min(620px,92vw);box-shadow:0 12px 34px rgba(0,0,0,.5);
+}
+
+/* ── 会话内搜索条（Ctrl+F）────────────────────────── */
+#searchbar{
+  position:fixed;top:56px;right:28px;z-index:55;display:flex;align-items:center;gap:6px;
+  background:var(--slab2);border:1px solid var(--rule2);border-radius:6px;padding:6px 8px;
+  box-shadow:0 12px 34px rgba(0,0,0,.5);
+}
+#searchbar[hidden]{display:none}
+#searchQ{
+  background:var(--slab);border:1px solid var(--rule);border-radius:4px;color:var(--chalk);
+  font:12.5px var(--sans);padding:5px 9px;width:220px;outline:none;
+}
+#searchQ:focus{border-color:var(--signal-dim)}
+#searchCnt{font:11px var(--mono);color:var(--muted);min-width:40px;text-align:center}
+#searchbar .ghost{padding:2px 8px}
+/* CSS Custom Highlight API 上色（参考 MDN 搜索高亮示例）：普通命中半透黄，当前命中亮橙 */
+::highlight(ac-search){background-color:rgba(217,164,65,.32)}
+::highlight(ac-current){background-color:#F5A742;color:#0F1319}
+</style></style>
+</head>
+<body>
+  <header>
+    <h1>AI Console</h1>
+    <span class="tag"><span id="upDot" class="dot"></span><b id="upTxt">连接中</b></span>
+
+    <span class="tag">模式
+      <span class="seg" id="modeSeg">
+        <button data-mode="build" class="on" title="可读写文件、执行命令">build</button>
+        <button data-mode="plan" title="只读，禁止改文件">plan</button>
+      </span>
+    </span>
+
+    <span class="tag">模型 <select id="modelSel"><option>加载中…</option></select></span>
+
+    <span class="spacer"></span>
+    <!-- 右侧工具区：窗口变窄时按 data-p 优先级（小的先收）把放不下的挪进 ⋯ 菜单，
+         参照 gijsroge/priority-navigation 的 doesItFit/toDropdown/toMenu 思路，
+         但改成"优先级属性"而不是"DOM 末尾先收"，这样视觉顺序不用变。 -->
+    <div id="hdrTools">
+      <span class="tag cnt" id="cntMsg" role="button" tabindex="0" data-p="70"
+        title="当前界面里渲染的消息条数（用户提问 + AI 回复，不含思考/工具的逐字增量）。点开看历史列表">消息 <b id="mcount">0</b></span>
+      <span class="tag cnt" id="cntSub" role="button" tabindex="0" data-p="60"
+        title="主 AI 派出去的子代理会话数。点一下定位到第一个子代理卡片">子代理 <b id="kcount">0</b></span>
+      <button class="ghost" id="permBtn" data-p="95" hidden title="有 agent 在等授权——点一下跳到审批卡">⏸ 待授权 <b id="permCount">0</b></button>
+      <button class="ghost" id="alarmBtn" data-p="92" title="提醒音与系统通知总开关（授权/出错必提醒；干完了只在窗口不在前台时响）">告警 开</button>
+      <button class="ghost" id="envBtn" data-p="20" title="查看 MCP 与 Skill（只读）">环境</button>
+      <button class="ghost" id="subBtn" data-p="30" title="给 researcher / cross-checker / orchestrator 分别指定模型">子代理模型</button>
+      <button class="ghost" id="shotsBtn" data-p="50" title="查看与清理界面截图">截图</button>
+      <button class="ghost" id="histBtn" data-p="90">历史</button>
+      <button class="ghost" id="clearBtn" data-p="40" title="回到主页（不会删除任何会话）">主页</button>
+    <button class="ghost" id="widthBtn" data-p="45" title="调整内容列宽度（Alt+滚轮也可调）">宽度</button>
+      <span class="seg" id="densitySeg" data-p="80" title="信息密度：精简 = 连续 ≥3 个已完成工具折叠成汇总行（todowrite 隐藏）；全部 = 逐行平铺">
+        <button data-d="compact" class="on">精简</button>
+        <button data-d="all">全部</button>
+      </span>
+      <button class="ghost" id="hdrMore" hidden title="放不下的按钮收在这里">⋯</button>
+      <div id="hdrDrop" hidden></div>
+    </div>
+  </header>
+
+  <aside id="hist" class="drawer">
+    <div class="dw-head">
+      <b>历史记录</b>
+      <button class="btn btn-sm btn-ghost" id="histRefresh">刷新</button>
+      <button class="btn btn-sm btn-ghost" id="histClose">关闭</button>
+    </div>
+    <div class="dw-searchbar">
+      <input id="histQ" placeholder="搜索全部历史正文…" autocomplete="off" />
+      <button class="dw-searchmode on" id="histSearchMode" title="切换：全文搜索 / 按标题过滤">全文</button>
+      <span class="dw-searchstat" id="histSearchStat"></span>
+    </div>
+    <div class="dw-body" id="histList"></div>
+    <div class="dw-detail" id="histDetail" hidden></div>
+  </aside>
+
+  <div id="shotsPanel" class="subpanel" hidden>
+    <div class="card bg-base-200 shadow-xl">
+      <div class="card-body p-4">
+        <h3 class="card-title text-sm">界面截图</h3>
+        <p class="text-xs opacity-60 break-all" id="shotsDir">读取中…</p>
+
+        <div class="flex items-center gap-2 my-2">
+          <span class="badge badge-primary badge-lg" id="shotsCount">–</span>
+          <span class="badge badge-neutral" id="shotsSize">–</span>
+        </div>
+
+        <div id="shotsByDate" class="text-xs opacity-70 space-y-1 mb-3"></div>
+
+        <div class="card-actions justify-end">
+          <button class="btn btn-sm btn-outline" id="shotsOpen">在资源管理器打开</button>
+          <button class="btn btn-sm btn-error btn-outline" id="shotsClear">清空</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="subPanel" class="subpanel" hidden>
+    <div class="sp-title">子代理模型</div>
+    <div class="sp-note">选「跟随主 AI」＝ 该子代理继承当前主会话的模型。改完立即生效，不需要重启服务。</div>
+    <label class="sp-row"><span>researcher<i>广度调研</i></span><select class="select select-sm select-bordered bg-base-200" data-agent="researcher"></select></label>
+    <label class="sp-row"><span>cross-checker<i>交叉验证</i></span><select class="select select-sm select-bordered bg-base-200" data-agent="cross-checker"></select></label>
+    <label class="sp-row"><span>orchestrator<i>拆解派活</i></span><select class="select select-sm select-bordered bg-base-200" data-agent="orchestrator"></select></label>
+    <div class="sp-warn" id="spWarn" hidden></div>
+    <div class="sp-foot">
+      <span id="spState" class="sp-state"></span>
+      <button class="btn btn-sm btn-ghost" id="spCancel">取消</button>
+      <button class="btn btn-sm btn-primary" id="spSave">保存</button>
+    </div>
+  </div>
+
+  <div id="envPanel" class="subpanel wide" hidden>
+    <div class="sp-title">环境</div>
+    <div class="sp-note">只读视图 —— 这里只能看状态，不能启停或增删 MCP、不能修改 Skill。</div>
+
+    <div class="ev-sec">MCP 服务 <span class="ev-count" id="mcpCount"></span></div>
+    <div id="mcpList" class="ev-list"></div>
+
+    <div class="ev-sec">Skills <span class="ev-count" id="skillCount"></span></div>
+    <div id="skillList" class="ev-list"></div>
+  </div>
+
+  <div id="outBar" class="outbar" hidden>
+    <span class="dot ok"></span>
+    <span class="ob-name"></span>
+    <span class="ob-meta"></span>
+    <span class="spacer"></span>
+    <button class="ghost sm" id="outList">查看全部</button>
+  </div>
+
+  <div id="pinBar" class="outbar" hidden>
+    <span class="dot ok"></span>
+    <span class="ob-name"></span>
+    <span class="spacer"></span>
+    <button class="ghost sm" id="pinBack">回到实时</button>
+  </div>
+
+  <div id="banner"></div>
+  <div id="toast"></div>
+
+  <div id="main">
+    <div id="placeholder">
+      发一条需求试试 · 主 AI 会自动拆解并派给子 AI<br>
+      <b>build</b> 模式可以改文件、跑命令；<b>plan</b> 模式只读不改<br>
+      灰色折叠块是 AI 的<b>思考过程</b>，紫色块是<b>派给子 AI 的任务</b>
+    </div>
+  </div>
+
+  <div id="msgNav" hidden></div>
+
+  <!-- 内容宽度面板 -->
+  <div id="widthPanel" hidden>
+    <div class="wp-title">内容列宽度 <b id="wpVal">92ch</b></div>
+    <input id="wpRange" type="range" min="60" max="130" step="1" value="92"
+           aria-label="内容列宽度" />
+    <div class="wp-scale"><span>60ch 窄</span><span>130ch 宽</span></div>
+    <div class="wp-hint">也可以按住 <kbd>Alt</kbd> 滚轮上下快速调</div>
+    <button id="wpReset" type="button">恢复 92ch</button>
+  </div>
+
+  <!-- 术语卡片 -->
+  <div id="termCard" hidden>
+    <div class="tc-head">
+      <span class="tc-title" id="tcTitle"></span>
+      <button class="tc-close" id="tcClose" title="关闭 (Esc)">×</button>
+    </div>
+    <div class="tc-ctx" id="tcCtx"></div>
+    <div class="tc-body" id="tcBody"></div>
+    <div class="tc-foot">
+      <input id="tcFollow" placeholder="接着问…（Enter 发送）" />
+      <button class="tc-pin" id="tcPin" title="钉住这张卡片">钉住</button>
+    </div>
+  </div>
+
+  <button id="toLatest" hidden title="回到最新消息">↓ 回到最新</button>
+
+  <div id="keysPanel" hidden>
+    <div class="keys-box">
+      <h3>快捷键</h3>
+      <div class="keys-row"><span>在会话中搜索</span><kbd>Ctrl / ⌘ + F</kbd></div>
+      <div class="keys-row"><span>关闭面板 / 退出搜索</span><kbd>Esc</kbd></div>
+      <div class="keys-row"><span>发送</span><kbd>Enter</kbd></div>
+      <div class="keys-row"><span>换行</span><kbd>Shift + Enter</kbd></div>
+      <div class="keys-row"><span>切换 build / plan</span><kbd>顶栏「模式」</kbd></div>
+      <div class="keys-row"><span>切换精简 / 全部</span><kbd>顶栏「精简|全部」</kbd></div>
+      <div class="keys-row"><span>中止卡住的会话</span><kbd>点工具行右侧「中止」</kbd></div>
+      <div class="keys-row"><span>打开历史</span><kbd>顶栏「历史」</kbd></div>
+      <div class="keys-row"><span>本面板</span><kbd>?</kbd></div>
+      <div class="keys-row" style="margin-top:10px"><span style="color:var(--rule2)">点击任意处关闭</span><kbd></kbd></div>
+    </div>
+  </div>
+
+  <div id="searchbar" hidden>
+    <input id="searchQ" placeholder="在会话中搜索…（Enter 下一个，Shift+Enter 上一个）" />
+    <span id="searchCnt"></span>
+    <button class="ghost" id="searchPrev" title="上一个 (Shift+Enter)">↑</button>
+    <button class="ghost" id="searchNext" title="下一个 (Enter)">↓</button>
+    <button class="ghost" id="searchClose" title="关闭 (Esc)">×</button>
+  </div>
+
+  <footer>
+    <textarea id="in" placeholder="描述你的需求…（Enter 发送，Shift+Enter 换行）"></textarea>
+    <div id="footer-btns">
+      <button class="act" id="send" disabled>发送</button>
+      <button class="ghost" id="abort" disabled>中止</button>
+    </div>
+    <span class="hint" id="modeHint">build · 可读写文件</span>
+  </footer>
+
+<script>
+'use strict'
+const $ = (id) => document.getElementById(id)
+const main = $('main')
+
+const S = new Map()          // sessionID -> record
+const partType = new Map()    // partID -> type
+const msgRole = new Map()     // messageID -> 'user' | 'assistant'（part 事件不带 role，靠这个缓存）
+const t0 = new Map()          // partID -> 思考开始时间戳
+const toolT0 = new Map()     // partID -> 工具开始时间戳
+let stuckNotified = new Set()
+let rootSession = null
+// 主界面当前钉在哪个会话上（"装载到主界面"后）。
+// 之前没这个状态时有个真 bug：S.clear() 只清了 DOM 注册表，全局 EventSource 还在推所有会话的事件，
+// 下一条 message.part.updated 就会 ensureSession() 把「正在跑的那条对话 + 它的子代理」
+// 整棵树重新挂回主区 —— 装载历史后主区里会长出第二份实时会话，DOM 越滚越大。
+// 钉上以后，非当前会话的事件直接丢弃（状态类事件仍然放行，好让顶栏计数/连接状态是真的）。
+let pinnedSession = null      // 历史快照钉住（顶栏出现「回到实时/主页」）
+let liveFocus = null          // 实时焦点：从主页新开的会话，只渲染这一棵树
+let liveBeforePin = null
+let curMode = 'build'
+let curModel = null
+let models = []
+let follow = true
+
+main.addEventListener('scroll', () => {
+  const gap = main.scrollHeight - main.scrollTop - main.clientHeight
+  if (gap < 40) follow = true
+  // 只把"用户主动往上滚"当作取消跟随：吸底/内容高度变化也会触发 scroll，
+  // 不能因为它们把 follow 误判成 false（实测一轮长回复后停在中途）。
+  else if (Date.now() - stickAt > 500) follow = false
+})
+const down = (el) => { if (el && follow) el.scrollTop = el.scrollHeight }
+
+// 吸底（M18）：只有主会话流式时跟到底部；子代理卡不再抢滚动位置。
+// #main 开着 scroll-behavior:smooth，逐帧改 scrollTop 会让平滑动画一直重启，所以临时关掉。
+let stickAt = 0
+function stickBottom(rec) {
+  if (!follow || homeVisible || !rec || rec.parentID) return
+  const now = Date.now()
+  if (now - stickAt < 180) return
+  stickAt = now
+  const y = main.scrollHeight - main.clientHeight
+  if (y <= 0) return
+  const prev = main.style.scrollBehavior
+  main.style.scrollBehavior = 'auto'
+  main.scrollTop = y
+  main.style.scrollBehavior = prev
+}
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) =>
+  ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]))
+
+// ═══════════════ Markdown 渲染 ═══════════════
+// 自己实现，不引外部库（本地应用，且 CDN 不可靠）。
+// 顺序：先转义 HTML（防注入）→ 摘出行内代码/围栏代码占位 → 解析块级 → 回填行内。
+function md(src) {
+  let s = String(src ?? '').replace(/[\u0000\u0001]/g, '')
+  s = esc(s)
+
+  // 围栏代码块整体摘出，避免里面被当成 markdown
+  const fences = []
+  s = s.replace(/```([\w+#.-]*)[ \t]*\n?([\s\S]*?)(?:```|$)/g, (_, lang, body) => {
+    fences.push({ lang: lang || '', body: body.replace(/\n$/, '') })
+    return '\u0000F' + (fences.length - 1) + '\u0000'
+  })
+
+  const inline = (t) => {
+    const ics = []
+    t = t.replace(/`([^`\n]+)`/g, (_, c) => { ics.push(c); return '\u0001I' + (ics.length - 1) + '\u0001' })
+    // 链接（只允许 http/https/mailto，防 javascript:）
+    t = t.replace(/\[([^\]\n]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (m, a, u) =>
+      /^(https?:\/\/|mailto:)/i.test(u) ? '<a href="' + u + '" target="_blank" rel="noopener noreferrer">' + a + '</a>' : a)
+    t = t.replace(/\*\*\*([^*\n]+)\*\*\*/g, '<strong><em>$1</em></strong>')
+    t = t.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    // 斜体：中文没有空格，所以 *字* 前可能是汉字；另外要求内容首尾不是空白，
+    // 否则 "2 * 3 * 4 = 24" 这种乘法会被误吞成斜体。
+    t = t.replace(/(^|[\s(（「\u4e00-\u9fff])([*-])(\S|\S[^*\n]{0,400}?\S)\2(?=$|[\s)）」,，。；：、；！？…—\u4e00-\u9fff])/g, '$1<em>$3</em>')
+    t = t.replace(/~~([^~\n]+)~~/g, '<del>$1</del>')
+    t = t.replace(/(^|[\s(（「])(https?:\/\/[^\s<>"'）)\]，。！？]+)/g,
+      '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>')
+    return t.replace(/\u0001I(\d+)\u0001/g, (_, n) => '<code>' + ics[+n] + '</code>')
+  }
+
+  const isTableSep = (l) => /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(l) && l.includes('-') && l.includes('|')
+  const splitRow = (l) => l.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim())
+  const indentOf = (l) => (l.match(/^ */) || [''])[0].length
+
+  const lines = s.split('\n')
+  const out = []
+  let i = 0
+  const flushPara = (buf) => { if (buf.length) out.push('<p>' + buf.map(inline).join('<br>') + '</p>') }
+
+  const listAt = (l) => {
+    const m = l.match(/^(\s*)([-*+]|\d{1,9}[.)])\s+(.*)$/)
+    return m ? { ind: m[1].replace(/\t/g, '  ').length, ordered: /\d/.test(m[2]), body: m[3] } : null
+  }
+
+  const parseList = (base) => {
+    const ordered = listAt(lines[i]).ordered
+    out.push(ordered ? '<ol>' : '<ul>')
+    while (i < lines.length) {
+      const it = listAt(lines[i])
+      if (!it || it.ind < base) break
+      if (it.ind > base) { parseList(it.ind); continue }
+      if (it.ordered !== ordered) break
+      i++
+      const buf = [it.body]
+      // 续行：缩进更深且不是新列表项
+      while (i < lines.length) {
+        const nx = listAt(lines[i])
+        if (nx || !lines[i].trim()) break
+        if (indentOf(lines[i]) <= base && lines[i].trim()) break
+        buf.push(lines[i].trim()); i++
+      }
+      let inner = buf.join('\n')
+      // 任务列表 - [ ] / - [x]
+      const task = inner.match(/^\[([ xX])\]\s+([\s\S]*)$/)
+      if (task) inner = '<input type="checkbox" disabled' + (task[1] !== ' ' ? ' checked' : '') + '> ' + inline(task[2])
+      else inner = inline(inner)
+      out.push('<li>' + inner + '</li>')
+    }
+    out.push(ordered ? '</ol>' : '</ul>')
+  }
+
+  let para = []
+  while (i < lines.length) {
+    const l = lines[i]
+
+    // 围栏代码块回填
+    let fm = l.match(/^\u0000F(\d+)\u0000$/)
+    if (fm) {
+      flushPara(para); para = []
+      const f = fences[+fm[1]]
+      out.push('<div class="md-code"><div class="md-codebar">' +
+        (f.lang ? '<span class="md-lang" data-l="' + f.lang.toLowerCase() + '">' + f.lang + '</span>' : '<span class="md-lang"></span>') +
+        '<button class="md-copy" type="button">复制</button></div>' +
+        '<pre class="md-pre"><code>' + highlight(f.body, f.lang) + '</code></pre></div>')
+      i++; continue
+    }
+    if (!l.trim()) { flushPara(para); para = []; i++; continue }
+
+    // 标题
+    // 一次抓全部井号再判定：2-3 个容忍无空格（模型常这么写）；
+    // 1 个或 4-6 个仍要求空格，免得把 #标签 当标题。
+    // （旧写法 /^(#{2,3})\s*(\S)/ 优先匹配，会把 "#### x" 的前三个 # 吃掉、剩 "# x" 当正文）
+    let hm = l.match(/^(#{1,6})([ \t]*)(\S.*)$/)
+    if (hm && !hm[2] && (hm[1].length === 1 || hm[1].length >= 4)) hm = null
+    if (hm) {
+      flushPara(para); para = []
+      const lv = Math.min(6, hm[1].length + 2)
+      out.push('<h' + lv + '>' + inline(hm[3]) + '</h' + lv + '>'); i++; continue
+    }
+
+    // 分隔线
+    if (/^\s*([-*_])\s*(\1\s*){2,}$/.test(l)) { flushPara(para); para = []; out.push('<hr>'); i++; continue }
+
+    // 表格
+    if (l.includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      flushPara(para); para = []
+      const head = splitRow(l)
+      i += 2
+      const rows = []
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim()) { rows.push(splitRow(lines[i])); i++ }
+      out.push('<div class="md-tw"><table><thead><tr>' + head.map((c) => '<th>' + inline(c) + '</th>').join('') +
+        '</tr></thead><tbody>' + rows.map((r) => '<tr>' + head.map((_, k) => '<td>' + inline(r[k] ?? '') + '</td>').join('') + '</tr>').join('') +
+        '</tbody></table></div>')
+      continue
+    }
+
+    // 引用
+    // 注意：esc() 已把 ">" 转成 "&gt;"，这里必须匹配转义后的形态
+    if (/^\s*&gt;\s?/.test(l)) {
+      flushPara(para); para = []
+      const buf = []
+      while (i < lines.length && /^\s*&gt;\s?/.test(lines[i])) { buf.push(lines[i].replace(/^\s*&gt;\s?/, '')); i++ }
+      out.push('<blockquote>' + md(buf.join('\n')) + '</blockquote>')
+      continue
+    }
+
+    // 列表
+    const it = listAt(l)
+    if (it) { flushPara(para); para = []; parseList(it.ind); continue }
+
+    para.push(l)
+    i++
+  }
+  flushPara(para)
+  return out.join('\n')
+}
+
+function ms(n) {
+  if (n == null || !isFinite(n) || n < 0) return ''
+  if (n < 1000) return Math.round(n) + 'ms'
+  if (n < 60000) return (n / 1000).toFixed(1) + 's'
+  return Math.floor(n / 60000) + 'm' + Math.round((n % 60000) / 1000) + 's'
+}
+const cleanTitle = (t) => String(t || '').replace(/\s*\(@[^)]*\)\s*$/, '').trim()
+
+// 判断文本是否主要是中文
+function isChinese(t) {
+  const s = String(t || '')
+  if (!s.trim()) return true
+  const cjk = (s.match(/[一-鿿]/g) || []).length
+  const latin = (s.match(/[a-zA-Z]/g) || []).length
+  return cjk >= latin
+}
+function toast(msg, ms2 = 2600) {
+  const t = $('toast'); t.textContent = msg; t.style.display = 'block'
+  clearTimeout(t._h); t._h = setTimeout(() => { t.style.display = 'none' }, ms2)
+}
+
+// ═══════════════ 打字机：delta 进队列，rAF 逐字吐 ═══════════════
+const queue = new Map()   // partID -> {text, pos, apply(ch)}
+let raf = null
+function enqueue(pid, apply) {
+  if (!queue.has(pid)) queue.set(pid, { pos: 0, apply })
+  queue.get(pid).apply = apply
+  if (!raf) raf = requestAnimationFrame(tick)
+}
+// md() 延迟渲染：流式输出时先按纯文本逐帧刷，停下来再转成 Markdown。
+// 每次有新增量就重新计时，保证最后一段渲染的是完整内容。
+const mdPending = new Map()
+function scheduleMd(el) {
+  if (!el) return
+  const prev = mdPending.get(el)
+  if (prev) clearTimeout(prev)
+  mdPending.set(el, setTimeout(() => {
+    mdPending.delete(el)
+    const full = el.dataset.full
+    if (full == null || full === '') return
+    el.classList.remove('plain')
+    el.innerHTML = md(full)
+    // Markdown 定稿可能改变块高（表格/代码块），仍在跟随就重新吸一次底
+    const host = el.closest ? el.closest('.session') : null
+    if (host) { const r = S.get(host.id.slice(2)); if (r) stickBottom(r) }
+  }, 350))
+}
+
+// ═══════════════ 流式 Markdown 实时渲染（F2）═══════════════
+// 思路照 opencode markdown-stream.ts 的 remend：流式期间把未闭合的标记临时补全再渲染，
+// 停顿 350ms 后 scheduleMd 仍用原样正式渲染。我们只支持 8 种语法，修复规则自己写。
+function mdHeal(t) {
+  let s = String(t)
+  // 围栏：奇数个 ``` 行 → 补一个闭合行（正在输入的代码块立刻成块）
+  const fenceMarks = s.match(/^```[^\n]*/gm) || []
+  if (fenceMarks.length % 2 === 1) s += '\n```'
+  // 以下计数都要先摘掉围栏内容，别数到代码里的标记
+  const body = s.replace(/```[\s\S]*?(?:```|$)/g, '')
+  // 行内代码：奇数个 ` → 补
+  if (((body.match(/`/g) || []).length) % 2 === 1) s += '`'
+  // 粗体：奇数个 ** → 补（先摘行内代码，避免 `**` 被重复计数）
+  const noCode = body.replace(/`[^`\n]*`/g, '')
+  if (((noCode.match(/\*\*/g) || []).length) % 2 === 1) s += '**'
+  // 删除线：奇数个 ~~ → 补
+  const noStrong = noCode.replace(/\*\*/g, '')
+  if (((noStrong.match(/~~/g) || []).length) % 2 === 1) s += '~~'
+  // 半截链接 [text](url 还没打完 → 补 )，能链就链、链不了也是完整文本
+  s = s.replace(/\[([^\]\n]*)\]\(([^)\n]*)$/, '[$1]($2)')
+  return s
+}
+
+function tick() {
+  for (const [pid, q] of queue) {
+    const full = q.apply(true) || ''
+    if (q.pos >= full.length) { queue.delete(pid); continue }
+    // 积压越多吐得越快，保证不落后
+    const gap = full.length - q.pos
+    const step = gap > 900 ? 60 : gap > 300 ? 24 : gap > 80 ? 8 : 2
+    q.pos = Math.min(full.length, q.pos + step)
+    q.apply(false, full.slice(0, q.pos))
+  }
+  raf = queue.size ? requestAnimationFrame(tick) : null
+}
+
+// ═══════════════ 卡片 ═══════════════
+function ensureSession(sid, info = {}) {
+  if (S.has(sid)) return S.get(sid)
+  const parentID = info.parentID && S.has(info.parentID) ? info.parentID : null
+  const isChild = !!parentID
+
+  const rec = { sid, parentID, agent: info.agent || null, status: 'busy', msgs: new Map(), lastMsgId: null, revert: info.revert || null, revBar: null,
+    t0: info.t0 || null, t1: null, ctx: 0, modelID: info.modelID || null, toolIds: null, tlEl: null, ctxEl: null }
+  rec.el = document.createElement('div')
+  rec.el.id = 's-' + sid
+  rec.el.className = (isChild ? 'child' : 'session') + ' busy' + (isChild ? ' collapsed' : '')
+  rec.el.innerHTML = `
+    <div class="${isChild ? 'c-head' : 's-head'}">
+      ${isChild ? '<span class="c-caret" title="展开/收起子会话">▸</span>' : ''}<span class="dot busy"></span>
+      <span class="${isChild ? 'c-title' : 's-title'}"></span>
+      ${isChild ? '<span class="s-badge agent c-agent" style="display:none"></span>'
+                : '<span class="s-badge root">主 AI</span><span class="s-acts"><button type="button" data-act="revert" title="撤回上一轮：还原文件改动，之后发新消息将从这里继续">撤回</button><button type="button" data-act="fork" title="把整段对话分叉成新会话（原会话不动）">分叉</button><button type="button" data-act="summ" title="让模型把当前上下文压成摘要（消耗会话模型 token）">压缩</button></span><span class="spacer"></span><span class="s-meta"></span><span class="s-ctx" style="display:none"></span><span class="s-progress"></span>'}
+    </div>
+    <div class="${isChild ? 'c-body' : 's-body'}"></div>
+    ${isChild ? '' : '<div class="tl" hidden></div><div class="children"></div>'}`
+
+  rec.titleEl = rec.el.querySelector('.s-title, .c-title')
+  rec.bodyEl = rec.el.querySelector('.s-body, .c-body')
+  rec.badgeAgent = rec.el.querySelector('.c-agent')
+  rec.metaEl = rec.el.querySelector('.s-meta')
+  rec.progEl = rec.el.querySelector('.s-progress')
+  rec.ctxEl = rec.el.querySelector('.s-ctx')
+  rec.tlEl = rec.el.querySelector('.tl')
+  rec.childWrap = rec.el.querySelector('.children')
+  if (info.title) rec.titleEl.textContent = cleanTitle(info.title)
+  if (rec.badgeAgent && info.agent) { rec.badgeAgent.style.display = ''; rec.badgeAgent.textContent = info.agent }
+  if (!isChild) {
+    rec.el.querySelector('.s-acts').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-act]')
+      if (b) sessAct(rec, b.dataset.act)
+    })
+  }
+
+  S.set(sid, rec)
+  paintPermsFor(sid)   // 会话卡重建时补挂仍在等待的审批卡（如"回到实时"之后）
+  loadTodos(sid)       // 首次见到该会话时回填待办（静默，404 跳过）
+  const ph = $('placeholder'); if (ph) ph.remove()
+
+  if (isChild) {
+    rec.el.querySelector('.c-head').addEventListener('click', () => toggleKid(rec))
+    S.get(parentID).childWrap.appendChild(rec.el)
+    updateProgress(S.get(parentID))
+    scheduleTL(parentID)
+    // 派活时给主卡片一个提示（超长才截断并补省略号，不做无声的拦腰切）
+    const dt = cleanTitle(info.title)
+    toast('主 AI 派出子代理：' + (dt.length > 40 ? dt.slice(0, 40) + '…' : dt))
+  } else {
+    main.appendChild(rec.el)
+    if (!rootSession) rootSession = sid
+  }
+  paintCounts()
+  if (!isChild) stickBottom(rec)
+  return rec
+}
+
+// 子代理折叠（M18）：默认只留状态头，避免子会话正文把主对话压到看不见
+function toggleKid(rec, force) {
+  if (!rec || !rec.parentID) return
+  const collapse = force === undefined ? !rec.el.classList.contains('collapsed') : !!force
+  rec.el.classList.toggle('collapsed', collapse)
+  const c = rec.el.querySelector('.c-caret')
+  if (c) c.textContent = collapse ? '▸' : '▾'
+}
+function setKids(rootSid, collapse) {
+  for (const r of S.values()) if (r.parentID === rootSid) toggleKid(r, collapse)
+}
+
+function updateProgress(rec) {
+  if (!rec || rec.parentID || !rec.progEl) return
+  const kids = [...S.values()].filter((x) => x.parentID === rec.sid)
+  const done = kids.filter((x) => x.status === 'idle' || x.status === 'error').length
+  const run = kids.filter((x) => x.status === 'busy').length
+  rec.progEl.innerHTML = kids.length
+    ? `已派 <b>${done}</b>/<i>${kids.length}</i> 完成` + (run ? ` · <i>${run}</i> 进行中` : '')
+    : (rec.status === 'busy' ? '思考中…' : '')
+}
+
+// ═══════════════ 子代理时间线 + context 健康（M17） ═══════════════
+function modelIdOf(m) {
+  if (!m) return null
+  return typeof m === 'string' ? m : (m.id || m.modelID || null)
+}
+function fmtDur(ms) {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return s + 's'
+  const m = Math.floor(s / 60), r = s % 60
+  if (m < 60) return m + 'm' + (r ? String(r).padStart(2, '0') + 's' : '')
+  return Math.floor(m / 60) + 'h' + String(m % 60).padStart(2, '0') + 'm'
+}
+function fmtTok(n) {
+  const cut = (v) => v.toFixed(1).replace(/\.0$/, '')
+  return n >= 1e6 ? cut(n / 1e6) + 'M' : n >= 1e3 ? cut(n / 1e3) + 'k' : String(n)
+}
+function ctxLimitOf(mid) {
+  if (!mid) return null
+  const hit = models.find((m) => m.id === mid)
+  return hit && hit.context ? hit.context : null
+}
+function ctxPct(rec) {
+  if (!rec || !rec.ctx) return null
+  const lim = ctxLimitOf(rec.modelID)
+  if (!lim) return null
+  return Math.max(0, Math.round((rec.ctx / lim) * 100))
+}
+function paintCtx(rec) {
+  if (!rec || rec.parentID || !rec.ctxEl) return
+  const pct = ctxPct(rec)
+  if (pct == null) { rec.ctxEl.style.display = 'none'; return }
+  const lim = ctxLimitOf(rec.modelID)
+  rec.ctxEl.style.display = ''
+  rec.ctxEl.className = 's-ctx' + (pct >= 85 ? ' hot' : pct >= 65 ? ' warn' : '')
+  rec.ctxEl.textContent = 'ctx ' + pct + '%'
+  rec.ctxEl.title = '上下文约 ' + fmtTok(rec.ctx) + ' / ' + fmtTok(lim) + '（' + pct + '%）'
+    + (pct >= 85 ? ' · 接近上限，建议压缩' : pct >= 65 ? ' · 占用水位偏高' : '')
+}
+// 任一事件都是"这个会话在动"的证据：推进时间线右端 + 更新上下文水位
+function bumpLive(sid, p) {
+  const rec = S.get(sid); if (!rec) return
+  const now = Date.now()
+  rec.t1 = now
+  if (!rec.t0) rec.t0 = now
+  const info = p.info
+  if (info && info.role === 'assistant' && info.tokens) {
+    const t = info.tokens
+    const total = Number(t.total) || 0
+    if (total) {
+      rec.ctx = Math.max(0, total - (Number(t.output) || 0) - (Number(t.reasoning) || 0))
+      if (!rec.modelID) rec.modelID = info.modelID || null
+      paintCtx(rec)
+    }
+  }
+  const mid = info ? modelIdOf(info.model) : null
+  if (mid) { rec.modelID = mid; paintCtx(rec) }
+  if (p.part?.type === 'tool' && p.part.id) {
+    if (!rec.toolIds) rec.toolIds = new Set()
+    rec.toolIds.add(p.part.id)
+  }
+  scheduleTL(rec.parentID || rec.sid)
+}
+const tlDirty = new Set()
+let tlRaf = 0
+function scheduleTL(rid) {
+  if (!rid) return
+  tlDirty.add(rid)
+  if (tlRaf) return
+  tlRaf = requestAnimationFrame(() => {
+    tlRaf = 0
+    for (const id of tlDirty) paintTL(id)
+    tlDirty.clear()
+  })
+}
+function paintTL(rid) {
+  const root = S.get(rid)
+  if (!root || !root.tlEl || root.parentID) return
+  const kids = [...S.values()].filter((x) => x.parentID === rid && x.t0)
+  if (!kids.length) { root.tlEl.hidden = true; root.tlEl.innerHTML = ''; return }
+  const now = Date.now()
+  const end = Math.max(now, root.t1 || 0, ...kids.map((k) => k.t1 || k.t0))
+  const start = Math.min(root.t0 || end, ...kids.map((k) => k.t0))
+  const span = Math.max(1000, end - start)
+  const anyOpen = kids.some((k) => !k.el.classList.contains('collapsed'))
+  const rows = kids.sort((a, b) => a.t0 - b.t0).map((k) => {
+    const run = k.status === 'busy' || k.status === 'waiting' || k.status === 'retry'
+    const b = run ? now : (k.t1 || k.t0)
+    const left = Math.max(0, ((k.t0 - start) / span) * 100)
+    const width = Math.max(1.2, Math.min(100 - left, ((b - k.t0) / span) * 100))
+    const bits = [fmtDur(b - k.t0)]
+    const n = k.toolIds ? k.toolIds.size : 0
+    if (n) bits.push(n + ' 工具')
+    const cp = ctxPct(k)
+    if (cp != null) bits.push('ctx ' + cp + '%')
+    const full = k.titleEl ? k.titleEl.textContent : (k.agent || '子代理')
+    const nm = k.titleEl ? k.titleEl.textContent.slice(0, 12) : (k.agent || '子代理')
+    return `<div class="tl-row" data-sid="${esc(k.sid)}"><span class="tl-name" title="${esc(full)}">${esc(nm)}</span><span class="tl-track"><span class="tl-bar${run ? ' on' : ''}${k.status === 'error' ? ' err' : ''}" style="left:${left.toFixed(2)}%;width:${width.toFixed(2)}%"></span></span><span class="tl-meta">${bits.map(esc).join(' · ')}</span></div>`
+  })
+  root.tlEl.hidden = false
+  const btn = `<button class="ghost sm" type="button" data-kids="${anyOpen ? 'close' : 'open'}">${anyOpen ? '收起全部' : '展开全部'}</button>`
+  root.tlEl.innerHTML = `<div class="tl-h">子代理时间线<span class="tl-right">${btn}<span>${fmtDur(span)} 轮次</span></span></div>` + rows.join('')
+}
+
+function paintCounts() {
+  // 回放出来的消息不在 rec.msgs 里，按 DOM 数（.rp = 一条回放消息，.msg = 一条实时消息）
+  $('mcount').textContent = [...S.values()].reduce((n, r) => n + r.msgs.size + r.bodyEl.querySelectorAll('.rp').length, 0)
+  $('kcount').textContent = [...S.values()].filter((r) => r.parentID).length
+}
+
+function setStatus(sid, st) {
+  const rec = S.get(sid); if (!rec) return
+  const prev = rec.status
+  rec.status = st
+  const M = { busy:['dot busy','busy'], idle:['dot ok',''], retry:['dot warn','waiting'],
+              waiting:['dot warn','waiting'], error:['dot err','error'] }
+  const [d, ex] = M[st] || M.idle
+  rec.el.querySelector('.dot').className = d
+  const collapsed = rec.parentID && rec.el.classList.contains('collapsed')
+  rec.el.className = (rec.parentID ? 'child' : 'session') + (ex ? ' ' + ex : '') + (collapsed ? ' collapsed' : '')
+  updateProgress(rec); paintCounts()
+  scheduleTL(rec.parentID || rec.sid); paintCtx(rec)
+  // 快照身份条跟着实时状态走：刚装载时还在跑，跑完就不要再挂着"未生成完"的警告
+  if (st === 'idle' && !rec.parentID) {
+    const bar = rec.el.querySelector('.snap-bar')
+    if (bar) {
+      const lv = bar.querySelector('.snap-live'); if (lv) lv.textContent = '快照后已继续到最新'
+      const wn = bar.querySelector('.snap-warn'); if (wn) wn.remove()
+    }
+  }
+  // 干完提醒：根会话从 busy 落到 idle（窗口不在前台时才出声，见 alarm 内部）
+  if (st === 'idle' && prev === 'busy' && !rec.parentID) {
+    alarm('done', { sessionID: sid, body: rec.titleEl ? rec.titleEl.textContent : '' })
+  }
+}
+
+// ═══════════════ 权限审批 ═══════════════
+// 上游 SSE 事件：permission.updated / permission.replied（v1 命名）。
+// 注意 1.19 服务端和 1.18 SDK 的字段不完全一致：标题可能叫 title / permission / type，
+// 匹配范围可能是 pattern 也可能是 patterns —— 做归一化，别赌单一形状（实测过两端）。
+// 回复走 POST /api/permission/reply → 上游 /session/:id/permissions/:permissionID。
+const pendingPerms = new Map()   // permissionID -> { p, cardEl: null | HTMLElement }
+
+function permNorm(p) {
+  const pats = p.patterns || p.pattern || []
+  return {
+    id: p.id,
+    sessionID: p.sessionID,
+    title: p.title || p.permission || p.type || '操作',
+    pats: Array.isArray(pats) ? pats : [pats],
+  }
+}
+
+function paintPermBadge() {
+  const n = pendingPerms.size
+  const btn = $('permBtn')
+  if (btn) btn.hidden = n === 0
+  const c = $('permCount'); if (c) c.textContent = n
+  // 标题闪烁：窗口不在前台时这是最直接的提醒通道（系统通知在第 ③ 步接）
+  document.title = n ? `⏸ ${n} 待授权 · AI Console` : 'AI Console'
+  if (typeof adaptHeader === 'function') adaptHeader()
+}
+
+function renderPermCard(p) {
+  const rec = S.get(p.sessionID)
+  const entry = pendingPerms.get(p.id)
+  if (!rec || !entry) return
+  if (entry.cardEl && entry.cardEl.isConnected) return
+
+  const n = permNorm(p)
+  const card = document.createElement('div')
+  card.className = 'perm-card'
+  card.dataset.perm = p.id
+  // 骨架是静态字符串；上游给的内容（title/pattern）一律 textContent 注入，防注入
+  card.innerHTML = `
+    <div class="pc-head"><span class="pc-title">等待授权</span><span class="pc-meta"></span></div>
+    <div class="pc-pats"></div>
+    <div class="pc-acts">
+      <button class="once" title="只批准这一次">允许一次</button>
+      <button class="always" title="保存规则：同类操作以后不再询问">总是允许</button>
+      <button class="rej" title="拒绝这次操作">拒绝</button>
+    </div>`
+  card.querySelector('.pc-meta').textContent = n.title
+  const patBox = card.querySelector('.pc-pats')
+  for (const s of n.pats) {
+    if (typeof s !== 'string') continue
+    const chip = document.createElement('code')
+    chip.className = 'pc-pat'
+    chip.textContent = s.length > 160 ? s.slice(0, 157) + '…' : s
+    patBox.appendChild(chip)
+  }
+  if (!patBox.childElementCount) patBox.remove()
+
+  card.querySelector('.once').onclick = () => replyPerm(p, 'once', card)
+  card.querySelector('.always').onclick = () => replyPerm(p, 'always', card)
+  card.querySelector('.rej').onclick = () => replyPerm(p, 'reject', card)
+
+  const head = rec.el.querySelector('.s-head, .c-head')
+  if (head) head.after(card); else rec.el.prepend(card)
+  entry.cardEl = card
+}
+
+function replyPerm(p, response, card) {
+  card.querySelectorAll('button').forEach((b) => { b.disabled = true })
+  const meta = card.querySelector('.pc-meta')
+  fetch('/api/permission/reply', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionID: p.sessionID, permissionID: p.id, response }),
+  }).then(async (r) => {
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status))
+    meta.textContent = (meta.textContent || '') + ' · 已回复' + (response === 'reject' ? '（拒绝）' : '')
+    // 卡片正常由 permission.replied 事件清理；万一事件没到（版本差异），10s 兜底
+    setTimeout(() => { if (pendingPerms.has(p.id)) dropPerm(p.id) }, 10000)
+  }).catch((e) => {
+    card.querySelectorAll('button').forEach((b) => { b.disabled = false })
+    toast('回复授权失败：' + e.message, 5000)
+  })
+}
+
+function dropPerm(id) {
+  const entry = pendingPerms.get(id)
+  if (!entry) return
+  if (entry.cardEl) entry.cardEl.remove()
+  pendingPerms.delete(id)
+  const rec = S.get(entry.p.sessionID)
+  // waiting 是我们为审批临时盖的状态；清掉后先回到 busy，后续状态事件会纠正
+  if (rec && rec.status === 'waiting') setStatus(entry.p.sessionID, 'busy')
+  paintPermBadge()
+}
+
+// 会话卡片重建后（装载历史再回来 / 断线重连）补挂仍在等待的审批卡
+function paintPermsFor(sid) {
+  for (const entry of pendingPerms.values()) {
+    if (entry.p.sessionID === sid) renderPermCard(entry.p)
+  }
+}
+
+// 页面刷新后从上游回填待审批列表（避免"刷新一下授权提示就没了"）
+async function loadPendingPerms() {
+  try {
+    const r = await fetch('/api/permissions')
+    if (!r.ok) return
+    const j = await r.json()
+    for (const item of (j.list || [])) {
+      if (!item || !item.id || !item.sessionID || pendingPerms.has(item.id)) continue
+      handle({ type: 'permission.updated', properties: item }, true)   // quiet：不弹 toast
+    }
+  } catch { /* 回填失败不打扰 */ }
+}
+
+// ═══════════════ 待办条（todos）═══════════════
+// 上游 todo.updated 是整表快照；GET /session/:id/todo 补"装载/刷新时已存在的待办"。
+// 待办项形如 {content, status(pending|in_progress|completed|cancelled), priority}（实测无 id）。
+const todoState = new Map()    // sessionID -> [{content, status, priority}]
+const todoOpen = new Set()     // 展开着的会话
+const todoFetched = new Set()  // 已尝试过回填的会话（含失败，避免反复拉）
+
+function todoSummary(todos) {
+  const total = todos.length
+  const done = todos.filter((t) => t.status === 'completed').length
+  const doing = todos.filter((t) => t.status === 'in_progress').length
+  return { total, done, doing, label: '待办 ' + done + '/' + total }
+}
+
+function paintTodos(sid) {
+  const rec = S.get(sid); if (!rec) return
+  const strip = rec.el.querySelector(':scope > .todo-strip'); if (!strip) return
+  const todos = todoState.get(sid) || []
+  const s = todoSummary(todos)
+  const open = todoOpen.has(sid)
+  const head = strip.querySelector('.ts-head')
+  head.textContent = (open ? '▾ ' : '▸ ') + s.label + (s.doing ? ' · 进行中 ' + s.doing : '')
+  const list = strip.querySelector('.ts-list')
+  list.hidden = !open
+  if (!open) return
+  list.innerHTML = ''
+  for (const t of todos) {
+    const st = t.status === 'completed' ? 'done' : t.status === 'in_progress' ? 'doing'
+      : t.status === 'cancelled' ? 'cancel' : 'pending'
+    const row = document.createElement('div')
+    row.className = 'ts-item ' + st
+    const ico = document.createElement('span'); ico.className = 'ts-ico'
+    ico.textContent = st === 'done' ? '✓' : st === 'doing' ? '▶' : st === 'cancel' ? '✕' : '○'
+    const txt = document.createElement('span'); txt.className = 'ts-txt'
+    txt.textContent = String(t.content || '')   // 上游内容一律 textContent，防注入
+    row.appendChild(ico); row.appendChild(txt)
+    list.appendChild(row)
+  }
+}
+
+function renderTodos(sid) {
+  const rec = S.get(sid); if (!rec) return
+  const todos = todoState.get(sid) || []
+  let strip = rec.el.querySelector(':scope > .todo-strip')
+  if (!todos.length) { if (strip) strip.remove(); return }
+  if (!strip) {
+    strip = document.createElement('div')
+    strip.className = 'todo-strip'
+    strip.innerHTML = '<button class="ts-head" type="button"></button><div class="ts-list" hidden></div>'
+    strip.querySelector('.ts-head').onclick = () => {
+      if (todoOpen.has(sid)) todoOpen.delete(sid); else todoOpen.add(sid)
+      paintTodos(sid)
+    }
+    // 位置：会话头正下方；若已有审批卡，让审批卡排最前（更急），待办条跟在它们后面
+    const head = rec.el.querySelector('.s-head, .c-head')
+    const pcs = rec.el.querySelectorAll('.perm-card')
+    const anchor = pcs.length ? pcs[pcs.length - 1] : head
+    if (anchor) anchor.after(strip); else rec.el.prepend(strip)
+  }
+  paintTodos(sid)
+}
+
+async function loadTodos(sid) {
+  if (todoFetched.has(sid) || todoState.has(sid)) return
+  todoFetched.add(sid)
+  try {
+    const r = await fetch('/api/todo?sessionID=' + encodeURIComponent(sid))
+    if (!r.ok) return
+    const j = await r.json()
+    // 没有待办或会话不在上游（404）时上游返回 ok:false，静默跳过
+    if (j.ok && Array.isArray(j.todos)) {
+      todoState.set(sid, j.todos)
+      renderTodos(sid)
+    }
+  } catch { /* 回填失败不打扰 */ }
+}
+
+// ═══════════════ 告警（声音 + 系统通知）═══════════════
+// 三档：perm 授权三连音 / error 出错低音 / done 干完两连音（仅窗口不在前台时响）。
+// 总开关在顶栏「告警」（localStorage 记忆，默认开）；Web Audio / Notification
+// 不存在或被拒时静默降级——提醒是锦上添花，绝不能因它报错。
+const ALARM_KEY = 'ac-alarm'
+function alarmOn() { try { return localStorage.getItem(ALARM_KEY) !== '0' } catch { return true } }
+const ALARM_TONES = {
+  perm:  [[659, 0, .09], [880, .1, .09], [988, .2, .14]],
+  error: [[233, 0, .16], [196, .18, .22]],
+  done:  [[523, 0, .1], [784, .12, .16]],
+}
+let audioCtx = null
+function beep(type) {
+  if (!alarmOn()) return
+  try {
+    const AC = window.AudioContext || window.webkitAudioContext
+    if (!AC) return
+    if (!audioCtx) audioCtx = new AC()
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {})
+    const now = audioCtx.currentTime
+    for (const [freq, at, dur] of ALARM_TONES[type] || []) {
+      const o = audioCtx.createOscillator(); const g = audioCtx.createGain()
+      o.type = 'sine'; o.frequency.value = freq
+      g.gain.setValueAtTime(0.0001, now + at)
+      g.gain.exponentialRampToValueAtTime(0.08, now + at + 0.015)
+      g.gain.exponentialRampToValueAtTime(0.0001, now + at + dur)
+      o.connect(g); g.connect(audioCtx.destination)
+      o.start(now + at); o.stop(now + at + dur + 0.05)
+    }
+  } catch { /* 播放失败不打扰 */ }
+}
+function notify(title, body, sid) {
+  if (!alarmOn()) return
+  try {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return
+    const n = new Notification(title, { body: body || '', tag: 'ac-' + (sid || title) })
+    n.onclick = () => {
+      try { window.focus() } catch {}
+      if (sid) { const rec = S.get(sid); if (rec) rec.el.scrollIntoView({ block: 'center', behavior: 'smooth' }) }
+      n.close()
+    }
+  } catch { /* 通知失败不打扰 */ }
+}
+let lastHardAt = 0   // perm/error 共享节流，防连响
+let lastDoneAt = 0   // done 单独节流（多个会话前后脚跑完时别连环响）
+function alarm(type, opts = {}) {
+  if (!alarmOn()) return
+  const now = Date.now()
+  if (type === 'done') {
+    if (document.hasFocus && document.hasFocus()) return   // 干完：窗口在前台就不吵
+    if (now - lastDoneAt < 10000) return
+    lastDoneAt = now
+  } else {
+    if (now - lastHardAt < 4000) return
+    lastHardAt = now
+  }
+  beep(type)
+  if (type === 'perm') notify('需要授权', opts.body || '', opts.sessionID)
+  else if (type === 'error') notify('会话出错', opts.body || '', opts.sessionID)
+  else if (type === 'done') notify('干完了', opts.body || '', opts.sessionID)
+}
+function paintAlarmBtn() {
+  const b = $('alarmBtn'); if (!b) return
+  const on = alarmOn()
+  b.textContent = '告警 ' + (on ? '开' : '关')
+  b.classList.toggle('off', !on)
+}
+$('alarmBtn').onclick = () => {
+  const on = !alarmOn()
+  try { localStorage.setItem(ALARM_KEY, on ? '1' : '0') } catch {}
+  paintAlarmBtn()
+  if (on) {
+    // 在点击手势里申请通知权限最稳
+    try { if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission().catch(() => {}) } catch {}
+    beep('perm')   // 试听：开的时候让用户知道是什么动静
+  }
+}
+paintAlarmBtn()
+
+// ═══════════════ 会话操作：撤回 / 分叉 / 压缩（M16）═══════════════
+async function postJSON(path, body) {
+  try {
+    const r = await fetch(path, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body || {}),
+    })
+    const j = await r.json().catch(() => ({}))
+    if (!r.ok) return { ok: false, error: j.error || ('HTTP ' + r.status) }
+    return j
+  } catch (e) {
+    return { ok: false, error: e.message }
+  }
+}
+
+// 回退状态绘制：从 revert 目标消息起整段压暗 + 顶部横幅（含"恢复消息"）。
+// 上游语义（实测）：revert 会还原文件改动，且**单向** —— unrevert 只恢复消息，不恢复文件。
+function paintRevert(rec) {
+  if (!rec || !rec.bodyEl) return
+  for (const el of rec.bodyEl.querySelectorAll('.revd')) el.classList.remove('revd')
+  if (rec.revBar) { rec.revBar.remove(); rec.revBar = null }
+  const rid = rec.revert && rec.revert.messageID
+  if (!rid) return
+  let on = false
+  for (const el of rec.bodyEl.children) {
+    if (el.dataset && el.dataset.mid === rid) on = true
+    if (on) el.classList.add('revd')
+  }
+  const bar = document.createElement('div')
+  bar.className = 'rev-bar'
+  bar.innerHTML = '<span>已回退：下方旧消息将被下一条新消息替换，文件改动已还原。发送新消息即确认。</span>' +
+    '<button type="button">恢复消息</button>'
+  const btn = bar.querySelector('button')
+  btn.onclick = async () => {
+    btn.disabled = true
+    const j = await postJSON('/api/unrevert', { sessionID: rec.sid })
+    btn.disabled = false
+    if (!j.ok) return toast('恢复失败：' + (j.error || '上游无响应'))
+    rec.revert = j.revert || null
+    paintRevert(rec)
+    toast('消息已恢复（注意：文件改动不会恢复，回退是单向的）')
+  }
+  rec.el.insertBefore(bar, rec.bodyEl)
+  rec.revBar = bar
+}
+
+// 上游在回退状态下收到新 prompt 时会永久丢弃回退点之后的消息（实测），
+// 本地 DOM 同步删掉这一段，避免页面显示和上游状态分叉。
+// 乐观气泡（data-opt，还没拿到真实 message id）跳过，等真实消息到达时替换。
+function truncateReverted(rec) {
+  if (!rec || !rec.revert) return false
+  const rid = rec.revert.messageID
+  let on = false
+  for (const el of [...rec.bodyEl.children]) {
+    if (el.dataset && el.dataset.mid === rid) on = true
+    if (!on || (el.dataset && el.dataset.opt)) continue
+    const mid = el.dataset && el.dataset.mid
+    if (mid && rec.msgs.has(mid)) rec.msgs.delete(mid)
+    const nb = navItems.get(el)
+    if (nb) { nb.remove(); navItems.delete(el) }
+    el.remove()
+  }
+  if (rec.lastMsgId && !rec.bodyEl.querySelector('.msg[data-mid="' + CSS.escape(rec.lastMsgId) + '"]')) rec.lastMsgId = null
+  rec.revert = null
+  paintRevert(rec)
+  return true
+}
+
+async function sessAct(rec, kind) {
+  if (rec.status === 'busy' || rec.status === 'retry') return toast('会话正在运行，等它跑完再操作')
+  if (kind === 'revert') {    if (rec.revert) return toast('已经处于回退状态——先点横幅里的「恢复消息」再重新回退')
+    const j = await postJSON('/api/revert', { sessionID: rec.sid })
+    if (!j.ok) return toast('撤回失败：' + (j.error || '上游无响应'))
+    rec.revert = j.revert || null
+    paintRevert(rec)
+    toast('已回退上一轮：文件改动已还原；发送新消息将从这里继续')
+  } else if (kind === 'fork') {
+    const j = await postJSON('/api/fork', { sessionID: rec.sid })
+    if (!j.ok) return toast('分叉失败：' + (j.error || '上游无响应'))
+    toast('已分叉为新会话：' + cleanTitle((j.session && j.session.title) || '新会话'))
+  } else if (kind === 'summ') {
+    toast('正在压缩上下文…（耗时取决于会话长度）')
+    const st = Date.now()
+    const j = await postJSON('/api/summarize', { sessionID: rec.sid })
+    if (!j.ok) return toast('压缩失败：' + (j.error || '上游无响应'))
+    toast('上下文已压缩（' + Math.round((Date.now() - st) / 1000) + 's）')
+  }
+}
+
+// ═══════════════ 消息 ═══════════════
+function ensureMsg(rec, mid, role) {
+  let m = rec.msgs.get(mid)
+  if (m) return m
+  const you = role === 'user'
+  const isKid = !!rec.parentID
+  const youTag = isKid ? '派活指令' : '你发的'
+  const el = document.createElement('div')
+  const roleCls = you ? 'you' : 'ai'
+  // 连续同一角色时不再重复"你发的 / AI 回复"，标签只在角色切换处出现一次
+  const prev = rec.bodyEl.lastElementChild
+  // 注意：classList.contains() 不接受复合选择器，写 'msg.ai' 会被当成一个类名而永远匹配不到
+  const same = !!prev && prev.classList.contains('msg') && prev.classList.contains(roleCls)
+  el.className = 'msg ' + roleCls + (same ? ' same' : '')
+  el.innerHTML = `<div class="msg-tag ${roleCls}">${you ? youTag : 'AI 回复'}<span class="msg-acts"></span></div>`
+  const body = document.createElement('div')
+  body.className = 'msg-body'
+  el.appendChild(body)
+  // 真实用户消息到达：先摘掉发送时的乐观气泡，避免同一条提问显示两遍
+  if (you) for (const o of rec.bodyEl.querySelectorAll('.msg[data-opt]')) o.remove()
+  // 装载历史后又收到这条消息的事件（会话仍在跑）：说明它是"装载之后还在流式"的那几条。
+  // 这时不能 append —— 回放里已经有同 id 的静态块了，追加就是同一条消息显示两遍。
+  // 用实时节点顶掉那条回放块：老消息保持回放（不会再有事件），在流的那几条继续实时更新。
+  const dup = rec.bodyEl.querySelector('.rp[data-mid="' + CSS.escape(mid) + '"]')
+  if (dup) {
+    // 回放块转实时块：把已渲染的部分搬进新容器（带 data-pid 的块会被后续增量继续更新）
+    const oldBody = dup.querySelector('.rp-body')
+    if (oldBody) {
+      const nb = el.querySelector('.msg-body')
+      for (const c of [...oldBody.children]) nb.appendChild(c)
+    }
+    dup.replaceWith(el)
+  } else rec.bodyEl.appendChild(el)
+  el.dataset.mid = mid
+  m = { el, body }
+  rec.msgs.set(mid, m)
+  rec.lastMsgId = mid
+  if (you) {
+    el.dataset.navLabel = isKid ? '（派活）' : '（提问）'
+    if (!isKid) addMsgAction(m, 'edit', '编辑重发')
+    registerNav(el, rec)
+  } else {
+    addMsgAction(m, 'copy', '复制全文')
+  }
+  paintCounts()
+  if (rec.revert) paintRevert(rec)   // 回退状态下新消息也要立刻压暗
+  return m
+}
+
+// 消息级操作按钮（hover 浮出）：复制全文 / 编辑重发
+function addMsgAction(m, kind, label) {
+  const acts = m.el.querySelector('.msg-acts')
+  if (!acts) return
+  const b = document.createElement('button')
+  b.type = 'button'
+  b.textContent = label
+  b.title = kind === 'copy' ? '复制这条回复的纯文本' : '把这条提问放回输入框，改完重发'
+  b.onclick = () => {
+    if (kind === 'copy') {
+      const txt = [...m.body.querySelectorAll('[data-type="text"]')].map((x) => x.textContent || '').join('\n\n')
+        || m.body.textContent.trim()
+      if (!txt) return toast('这条消息还没有内容')
+      copyText(txt).then(() => { b.dataset.done = '1'; b.textContent = '✓ 已复制' })
+        .catch(() => toast('复制失败')).finally(() => setTimeout(() => { delete b.dataset.done; b.textContent = label }, 1400))
+    } else {
+      const txt = m.body.textContent.trim()
+      if (!txt) return toast('这条提问没有内容')
+      $('in').value = txt
+      $('in').focus()
+      $('in').setSelectionRange(txt.length, txt.length)
+      toast('已放回输入框，改完直接回车重发')
+    }
+  }
+  acts.appendChild(b)
+}
+
+// ── 消息大纲侧条（F3，借鉴 opencode message-nav.tsx）──
+// 每个用户提问一个刻度，点击跳到那条消息；滚动时高亮当前所在的那条
+const navItems = new Map()   // el → 刻度按钮
+function registerNav(msgEl, rec) {
+  const nav = $('msgNav')
+  if (!nav || !rec || rec.parentID) return          // 只给根会话建大纲
+  if (navItems.has(msgEl)) return
+  const btn = document.createElement('button')
+  btn.type = 'button'
+  btn.className = 'mnav-item'
+  const tip = document.createElement('span')
+  tip.className = 'mnav-tip'
+  btn.appendChild(tip)
+  btn.onclick = () => {
+    msgEl.scrollIntoView({ block: 'start', behavior: 'smooth' })
+    msgEl.animate ? msgEl.animate([{ background: 'rgba(87,224,194,.10)' }, { background: 'transparent' }], { duration: 700 }) : 0
+  }
+  nav.appendChild(btn)
+  navItems.set(msgEl, { btn, tip })
+  nav.hidden = false
+  updateNavTips()
+}
+function updateNavTips() {
+  for (const [msgEl, { tip }] of navItems) {
+    const t = cleanTitle(msgEl.dataset.navLabel || msgEl.textContent || '').slice(0, 40)
+    tip.textContent = t || '提问'
+  }
+}
+function updateNavActive() {
+  if (!navItems.size) return
+  const main = $('main')
+  const mid = main.scrollTop + main.clientHeight * 0.35
+  let best = null, bestD = Infinity
+  for (const [msgEl, { btn }] of navItems) {
+    btn.classList.remove('on')
+    if (!msgEl.isConnected) continue
+    // offsetTop 是相对 offsetParent，这里换算成相对 #main 的位置
+    const top = msgEl.getBoundingClientRect().top - main.getBoundingClientRect().top + main.scrollTop
+    const d = Math.abs(top - mid)
+    if (d < bestD) { bestD = d; best = btn }
+  }
+  if (best) best.classList.add('on')
+}
+
+function ensurePart(m, pid, type) {
+  let el = m.body.querySelector(`[data-pid="${CSS.escape(pid)}"]`)
+  if (el) return el
+  el = document.createElement('div')
+  el.className = 'blk'
+  el.dataset.pid = pid
+  el.dataset.type = type
+  if (type === 'reasoning') {
+    el.innerHTML = '<details class="reason"><summary><span>思考过程</span>' +
+      '<span class="lang"></span><span class="dur"></span></summary><div class="rtext"></div></details>'
+  } else if (type === 'text') {
+    el.className = 'blk msg-body md'; el.style.border = 'none'; el.style.padding = '0'
+  } else if (type === 'dispatch') {
+    el.className = 'blk dispatch'
+    el.innerHTML = '<div class="d-head">⚡ 派活给子 AI</div><div class="d-body"></div>'
+  } else if (type === 'tool') {
+    el.className = 'blk'
+  }
+  m.body.appendChild(el)
+  return el
+}
+
+function paintReasoning(el, part) {
+  const pre = el.querySelector('.rtext')
+  const txt = typeof part.text === 'string' ? part.text : ''
+  if (txt.length >= pre.textContent.length) {
+    pre.innerHTML = md(txt)
+    const lang = el.querySelector('.lang')
+    if (lang) lang.textContent = isChinese(txt) ? '中文' : 'English'
+  }
+  const t = part.time || {}
+  if (t.start) {
+    t0.set(part.id, t.start)
+    const d = el.querySelector('.dur')
+    if (d) d.textContent = ms(t.end ? t.end - t.start : Date.now() - t.start)
+    if (!el.querySelector('details').open && txt.length > 200) el.querySelector('details').open = true
+  }
+}
+
+// task 工具 = 主 AI 派活，提取描述做高亮
+function paintTool(el, part) {
+  const isTask = part.tool === 'task'
+  const st = part.state?.status || 'pending'
+  const label = part.state?.title || part.tool || 'tool'
+  if (st === 'running' || st === 'pending') toolT0.set(part.id, Date.now())
+  else toolT0.delete(part.id)
+  el.dataset.sid = part.sessionID
+  // 折叠分组要用的元数据（regroupTools 从 dataset 读，不碰事件对象）
+  el.dataset.toolName = part.tool || ''
+  el.dataset.status = st
+  const tt = part.state?.time
+  el.dataset.ms = tt && tt.end && tt.start ? String(tt.end - tt.start) : ''
+  el.innerHTML = `<span class="tool ${isTask ? 'task' : ''}" data-tool="${esc(part.id)}">` +
+    `<span class="st ${esc(st)}"></span>` +
+    `<span class="t-name">${esc(label)}</span>` +
+    `<span class="t-st">${esc(st)}</span>` +
+    `<span class="el"></span></span>` +
+    (st === 'running' ? `<span class="warn-stuck" data-for="${esc(part.id)}"></span>` : '') +
+    toolExtraHtml(part)
+}
+
+// ═══════════════ 工具 diff 卡 / 错误卡（F1）═══════════════
+// 数据源（已实测）：edit.input={filePath,oldString,newString}、write.input={filePath,content}，
+// 失败时 state.output 是错误全文。我们的 SDK 版本没有 metadata.filediff，所以自己算。
+// 参考 opencode session-ui 的 session-diff.ts（+N −M 徽章）与 tool-error-card.tsx（错误卡）。
+
+// LCS 行级 diff：输出 [{t:'+'|'-'|' ', s}]
+// 大输入（>9 万元格）降级为公共前后缀裁剪 + 中段整块替换，防止 DP 矩阵爆内存
+function lineDiff(a, b) {
+  const A = String(a).split('\n'), B = String(b).split('\n')
+  const n = A.length, m = B.length
+  if (n * m > 90000) {
+    let pre = 0
+    while (pre < n && pre < m && A[pre] === B[pre]) pre++
+    let suf = 0
+    while (suf < n - pre && suf < m - pre && A[n - 1 - suf] === B[m - 1 - suf]) suf++
+    const rows = []
+    for (let i = 0; i < pre; i++) rows.push({ t: ' ', s: A[i] })
+    for (let i = pre; i < n - suf; i++) rows.push({ t: '-', s: A[i] })
+    for (let i = pre; i < m - suf; i++) rows.push({ t: '+', s: B[i] })
+    for (let i = n - suf; i < n; i++) rows.push({ t: ' ', s: A[i] })
+    return rows
+  }
+  const dp = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1))
+  for (let i = n - 1; i >= 0; i--)
+    for (let j = m - 1; j >= 0; j--)
+      dp[i][j] = A[i] === B[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1])
+  const rows = []
+  let i = 0, j = 0
+  while (i < n && j < m) {
+    if (A[i] === B[j]) { rows.push({ t: ' ', s: A[i] }); i++; j++ }
+    else if (dp[i + 1][j] >= dp[i][j + 1]) { rows.push({ t: '-', s: A[i] }); i++ }
+    else { rows.push({ t: '+', s: B[j] }); j++ }
+  }
+  while (i < n) rows.push({ t: '-', s: A[i++] })
+  while (j < m) rows.push({ t: '+', s: B[j++] })
+  return rows
+}
+
+function diffStats(rows) {
+  let add = 0, del = 0
+  for (const r of rows) { if (r.t === '+') add++; else if (r.t === '-') del++ }
+  return { add, del }
+}
+
+// 上下文压缩：只保留变化行 ±2 行，更长的相同段折成 "⋮ N 行未变"；
+// 大改动（成片插入/删除）超 40 显示行时，第 30 行后收进可展开折叠
+function diffBodyHtml(rows) {
+  const keep = new Set()
+  rows.forEach((r, i) => {
+    if (r.t === ' ') return
+    for (let j = i - 2; j <= i + 2; j++) if (j >= 0 && j < rows.length) keep.add(j)
+  })
+  const lines = []
+  let i = 0
+  while (i < rows.length) {
+    if (keep.has(i)) {
+      const r = rows[i]
+      const cls = r.t === '+' ? 'add' : r.t === '-' ? 'del' : 'ctx'
+      const sign = r.t === '+' ? '+' : r.t === '-' ? '−' : ' '
+      lines.push(`<span class="dl ${cls}">${sign} ${esc(r.s)}</span>`)
+      i++
+    } else {
+      let j = i
+      while (j < rows.length && !keep.has(j)) j++
+      lines.push(`<span class="dl gap">⋮ ${j - i} 行未变</span>`)
+      i = j
+    }
+  }
+  if (lines.length <= 40) return lines.join('\n')
+  return lines.slice(0, 30).join('\n') +
+    `\n<details class="tdiff-more"><summary>⋮ 展开余下 ${lines.length - 30} 行</summary>` +
+    lines.slice(30).join('\n') + '</details>'
+}
+
+const shortPath = (p) => String(p || '').split('/').filter(Boolean).slice(-2).join('/') || String(p || '')
+
+// ═══════════════ 轻量语法高亮（F4，自写 tokenizer）═══════════════
+// 输入是 esc() 之后的代码（引号已变 &quot; / &#39;），我们只在外面包 <span>，不解转义，
+// 所以 XSS 面不变。规则按"主正则 + 交替分组"：注释/字符串排在关键字前面，
+// 从左到右消费，字符串和注释里的关键字不会被误染色。
+const HL_RULES = {
+  js: {
+    comment: String.raw`//[^\n]*|/\*[\s\S]*?\*/`,
+    string: String.raw`&quot;(?:[^&\n]|&(?!quot;))*?&quot;|&#39;(?:[^&\n]|&(?!#39;))*?&#39;|` + '`(?:[^`\\\\]|\\\\.)*?`',
+    keyword: String.raw`\b(?:const|let|var|function|return|if|else|for|while|class|extends|new|import|from|export|default|async|await|try|catch|finally|throw|typeof|instanceof|of|in|this|null|undefined|true|false|switch|case|break|continue|delete|void|yield|static|get|set|do)\b`,
+    number: String.raw`\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b`,
+  },
+  py: {
+    comment: String.raw`#[^\n]*`,
+    string: String.raw`&quot;(?:[^&\n]|&(?!quot;))*?&quot;|&#39;(?:[^&\n]|&(?!#39;))*?&#39;`,
+    keyword: String.raw`\b(?:def|class|return|if|elif|else|for|while|import|from|as|with|try|except|finally|raise|lambda|pass|break|continue|and|or|not|is|in|None|True|False|global|nonlocal|yield|async|await|print|len|str|int|float|list|dict|set|tuple|range|enumerate|open|self)\b`,
+    number: String.raw`\b\d+(?:\.\d+)?\b`,
+  },
+  bash: {
+    comment: String.raw`#[^\n]*`,
+    string: String.raw`&quot;(?:[^&\n]|&(?!quot;))*?&quot;|&#39;(?:[^&\n]|&(?!#39;))*?&#39;`,
+    keyword: String.raw`\b(?:if|then|else|elif|fi|for|do|done|while|case|esac|function|echo|cd|export|local|return|exit|source|set|unset|shift|read|printf|mkdir|cp|mv|rm|ls|cat|grep|sed|awk|curl|chmod|chown|sudo|systemctl|node|npm|npx)\b`,
+    flag: String.raw`(?:\s|^)--?[\w][\w.-]*`,
+    number: String.raw`\b\d+\b`,
+  },
+  json: {
+    string: String.raw`&quot;(?:[^&\n]|&(?!quot;))*?&quot;`,
+    keyword: String.raw`\b(?:true|false|null)\b`,
+    number: String.raw`-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b`,
+  },
+}
+const HL_ALIAS = {
+  js: 'js', javascript: 'js', jsx: 'js', mjs: 'js', cjs: 'js',
+  ts: 'js', typescript: 'js', tsx: 'js',
+  py: 'py', python: 'py',
+  sh: 'bash', bash: 'bash', shell: 'bash', zsh: 'bash',
+  json: 'json', jsonc: 'json', json5: 'json',
+}
+function highlight(code, lang) {
+  const k = HL_ALIAS[String(lang || '').toLowerCase()]
+  const rules = k && HL_RULES[k]
+  if (!rules) return code
+  const order = ['comment', 'string', 'keyword', 'flag', 'number']
+  const parts = order.filter((x) => rules[x]).map((x) => `(${rules[x]})`)
+  if (!parts.length) return code
+  const re = new RegExp(parts.join('|'), 'g')
+  const cls = order.filter((x) => rules[x]).map((x) => x === 'comment' ? 'tk-c' : x === 'string' ? 'tk-s' : x === 'keyword' ? 'tk-k' : x === 'flag' ? 'tk-f' : 'tk-n')
+  return code.replace(re, (m, ...groups) => {
+    for (let i = 0; i < cls.length; i++) if (groups[i] !== undefined) return `<span class="${cls[i]}">${m}</span>`
+    return m
+  })
+}
+
+// edit/write 的 diff 卡 + 失败工具的错误卡；实时（paintTool）和回放（toolRowHtml）共用
+function toolExtraHtml(part) {
+  const st = part.state || {}
+  const inp = st.input || {}
+  if (st.status === 'error') {
+    const err = String(st.error || st.output || '').trim().slice(0, 500)
+    if (!err) return ''
+    return `<div class="terr"><div class="terr-head">⚠ ${esc(part.tool)} 执行失败</div>` +
+      `<pre class="terr-body">${esc(err)}</pre>` +
+      `<button class="md-copy terr-copy" type="button">复制错误</button></div>`
+  }
+  if (st.status !== 'completed') return ''
+  if (part.tool === 'edit' && typeof inp.oldString === 'string' && typeof inp.newString === 'string' && inp.oldString !== inp.newString) {
+    const rows = lineDiff(inp.oldString, inp.newString)
+    const { add, del } = diffStats(rows)
+    if (!add && !del) return ''
+    return `<div class="tdiff"><div class="tdiff-head">` +
+      `<span class="tdiff-file" title="${esc(inp.filePath || '')}">${esc(shortPath(inp.filePath))}</span>` +
+      `<span class="tdiff-stat"><b class="add">+${add}</b> <b class="del">−${del}</b></span></div>` +
+      `<pre class="tdiff-body">${diffBodyHtml(rows)}</pre></div>`
+  }
+  if (part.tool === 'write' && typeof inp.content === 'string') {
+    const lines = inp.content.split('\n')
+    const toRow = (l) => `<span class="dl add">+ ${esc(l)}</span>`
+    const preview = lines.slice(0, 12).map(toRow).join('\n')
+    const rest = lines.length > 12
+      ? `\n<details class="tdiff-more"><summary>⋮ 展开余下 ${lines.length - 12} 行</summary>${lines.slice(12).map(toRow).join('\n')}</details>`
+      : ''
+    return `<div class="tdiff"><div class="tdiff-head">` +
+      `<span class="tdiff-file" title="${esc(inp.filePath || '')}">${esc(shortPath(inp.filePath))}</span>` +
+      `<span class="tdiff-stat"><b class="add">+${lines.length}</b></span></div>` +
+      `<pre class="tdiff-body">${preview}${rest}</pre></div>`
+  }
+  return ''
+}
+
+// ═══════════════ 工具折叠（精简模式）═══════════════
+// 思路照 opencode session-ui 的 groupParts（packages/session-ui/src/components/message-part.tsx）：
+// 连续的"纯工作"消息攒成一组，遇到正文 / 派活 / 失败 / 运行中就打断。
+// 实测结构：每个 .msg 只装一个工具（r0t1x0），所以分组单位是整个 .msg，不是 msg-body 里的 blk。
+// "纯工作".msg = 无正文、无派活、≥1 个已完成工具、无 task。思考块（已折叠成一行）随消息一起折。
+// 阈值 ≥3 个工具（用户拍板）：1-2 个散工具保持平铺。
+const TG_MIN = 3
+function planToolGroups(seq, min = TG_MIN) {
+  // seq: [{fold, pid, n, byTool, ms}] —— 纯数据，不碰 DOM，方便单测
+  //   fold=true 表示该 .msg 可进折叠组；n=该消息里工具数；byTool/ms 是聚合
+  const groups = []
+  let start = -1
+  const flush = (end) => {
+    if (start >= 0) {
+      const items = seq.slice(start, end + 1)
+      const n = items.reduce((s, it) => s + (it.n || 1), 0)
+      if (n >= min) {
+        const byTool = {}
+        let ms = 0
+        for (const it of items) {
+          ms += it.ms || 0
+          for (const [k, v] of Object.entries(it.byTool || {})) byTool[k] = (byTool[k] || 0) + v
+        }
+        groups.push({ start, end, count: n, byTool, ms, firstPid: items[0].pid })
+      }
+    }
+    start = -1
+  }
+  seq.forEach((it, i) => {
+    if (it.fold) { if (start < 0) start = i; return }
+    flush(i - 1)
+  })
+  flush(seq.length - 1)
+  return groups
+}
+
+const tgOpen = new Set()   // 用户手动展开过的组（按组首工具 pid 记），重绘时恢复
+let compactMode = (typeof localStorage === 'undefined' || localStorage.getItem('ac-density') !== 'all')   // 默认精简
+const rgTimers = new Map()
+function scheduleRegroup(body) {
+  if (!body) return
+  clearTimeout(rgTimers.get(body))
+  rgTimers.set(body, setTimeout(() => { rgTimers.delete(body); regroupTools(body) }, 200))
+}
+
+// body 可以是会话容器或任意祖先：真正挂消息的是它里面的 .s-body / .c-body
+// （结构：.s-body > .msg > .msg-body > .blk；分组单位是整个 .msg）
+function regroupTools(body) {
+  if (!body) return
+  const scopes = (body.classList?.contains('s-body') || body.classList?.contains('c-body'))
+    ? [body] : [...body.querySelectorAll('.s-body, .c-body')]
+  for (const sc of scopes) regroupOne(sc)
+  down(body)
+}
+
+// 判断一个 .msg 是否"纯工作"（可折叠）：无正文、无派活、≥1 个已完成工具、无 task
+// 返回 {fold, pid, n, byTool, ms}
+function msgFoldInfo(el) {
+  const no = { fold: false }
+  if (!el.classList || !el.classList.contains('msg') || el.classList.contains('you')) return no
+  const b = el.querySelector('.msg-body')
+  if (!b) return no
+  let n = 0, ms = 0, pid = ''
+  const byTool = {}
+  for (const x of b.children) {
+    const ty = x.dataset?.type
+    if (ty === 'text') { if ((x.dataset.full || '').trim()) return no; continue }
+    if (ty === 'reasoning') continue
+    if (ty === 'dispatch') return no
+    if (ty === 'tool') {
+      // 精简模式下 todowrite 视为不存在：不计数、不打断连续段（CSS 同步隐藏）
+      if (compactMode && x.dataset.toolName === 'todowrite') continue
+      if (x.dataset.status !== 'completed') return no
+      if (x.dataset.toolName === 'task') return no
+      n++
+      ms += Number(x.dataset.ms || 0)
+      const k = x.dataset.toolName || 'tool'
+      byTool[k] = (byTool[k] || 0) + 1
+      if (!pid) pid = x.dataset.pid || ''
+      continue
+    }
+    return no
+  }
+  if (!n) return no
+  return { fold: true, pid, n, byTool, ms }
+}
+
+function regroupOne(scope) {
+  // 1) 幂等拆开现有组：成员平铺回原位
+  for (const g of [...scope.querySelectorAll(':scope > details.tgroup')]) {
+    const tb = g.querySelector('.tg-body')
+    while (tb && tb.firstChild) scope.insertBefore(tb.firstChild, g)
+    g.remove()
+  }
+  if (!compactMode) return
+  // 2) 逐个 .msg 判定可折叠性并分组
+  const kids = [...scope.children]
+  const seq = kids.map(msgFoldInfo)
+  const groups = planToolGroups(seq)
+  // 3) 从后往前包，避免索引漂移
+  for (let gi = groups.length - 1; gi >= 0; gi--) {
+    const g = groups[gi]
+    const members = kids.slice(g.start, g.end + 1)
+    if (!members.length || !members[0].parentNode) continue
+    const det = document.createElement('details')
+    det.className = 'tgroup'
+    det.dataset.key = g.firstPid
+    const byToolStr = Object.entries(g.byTool).map(([k, n]) => `${k}×${n}`).join(' ')
+    const sec = g.ms > 0 ? ` · ${(g.ms / 1000).toFixed(1)}s` : ''
+    det.innerHTML = `<summary><span class="tg-arrow">▸</span>${g.count} 次工具调用 · ${esc(byToolStr)}${sec}</summary><div class="tg-body"></div>`
+    scope.insertBefore(det, members[0])
+    const tb = det.querySelector('.tg-body')
+    for (const m of members) tb.appendChild(m)
+    if (tgOpen.has(g.firstPid)) det.open = true
+  }
+}
+
+// 记住用户手动展开/合上的组（toggle 不冒泡，用捕获）
+document.addEventListener('toggle', (e) => {
+  const d = e.target
+  if (d && d.classList && d.classList.contains('tgroup')) {
+    if (d.open) tgOpen.add(d.dataset.key); else tgOpen.delete(d.dataset.key)
+  }
+}, true)
+
+// 历史回放用的工具行 HTML（live 走 paintTool 的 DOM，回放走字符串）
+function toolRowHtml(p) {
+  const isTask = p.tool === 'task'
+  const st = p.state.status || '?'
+  // edit/write 的 diff 卡和错误卡优先；其余工具才退到"输出 N 字"折叠块
+  let extra = toolExtraHtml(p)
+  if (!extra && p.state.output) extra = `<details><summary style="font-size:11px;color:var(--muted);cursor:pointer">输出 ${String(p.state.output).length} 字</summary><pre class="md-pre"><code>${esc(String(p.state.output).slice(0, 2000))}</code></pre></details>`
+  return `<div style="margin:4px 0"><span class="tool ${isTask ? 'task' : ''}"><span class="st ${esc(st)}"></span><span class="t-name">${esc(p.state.title || p.tool)}</span><span class="t-st">${esc(st)}</span></span>${extra}</div>`
+}
+
+// 全文搜索跳转后，在目标消息块里高亮查询词（复用会话内搜索的 Highlight API）
+function highlightInBlock(block, term) {
+  const q = String(term || '').trim().toLowerCase()
+  if (!q || typeof CSS === 'undefined' || !CSS.highlights || typeof NodeFilter === 'undefined') return
+  const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT)
+  const ranges = []
+  let node
+  while ((node = walker.nextNode())) {
+    if (node.parentElement && node.parentElement.closest('script,style,.md-code')) continue
+    const text = node.textContent.toLowerCase()
+    let pos = 0
+    for (;;) {
+      const i = text.indexOf(q, pos)
+      if (i < 0) break
+      const r = new Range()
+      r.setStart(node, i); r.setEnd(node, i + q.length)
+      ranges.push(r)
+      pos = i + q.length
+      if (ranges.length >= 200) break
+    }
+    if (ranges.length >= 200) break
+  }
+  if (ranges.length) CSS.highlights.set('ac-hit', new Highlight(...ranges))
+  setTimeout(() => { try { CSS.highlights.delete('ac-hit') } catch {} }, 6000)
+}
+// ═══════════════ 术语卡片（选词 → 子 Agent 讲解）═══════════════
+// 交互模型：**你自己选词**，点浮层按钮 → 派一个临时子 Agent 讲解。
+// 借鉴 Curio（选词原位展开）、Readwise Quick Lookup（结合上下文而非通用词典）。
+// 静止时不干扰阅读（Obendorf links-on-demand 结论），也不依赖 AI 主动标记。
+const termState = { term: '', ctx: '', turns: [], pinned: false }
+
+function openTermCard(term, ctx) {
+  termState.term = term
+  termState.ctx = ctx || ''
+  termState.turns = []
+  $('termCard').hidden = false
+  $('tcTitle').textContent = term
+  $('tcCtx').textContent = termState.ctx
+  $('tcCtx').hidden = !termState.ctx
+  askTerm(term, termState.ctx)
+  $('tcFollow').focus()
+}
+
+async function askTerm(term, ctx, followUp = '') {
+  $('tcBody').innerHTML = '<div class="tc-loading">正在结合上下文解释这个词…（后端临时会话，问完即删）</div>'
+  try {
+    const r = await fetch('/api/explain', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ term, context: ctx, followUp }),
+    })
+    const j = await r.json()
+    if (j.error) throw new Error(j.error)
+    termState.turns.push(j.answer)
+    $('tcBody').innerHTML = termState.turns.map((t) => md(t)).join('<hr style="border:0;border-top:1px solid var(--rule);margin:12px 0">') +
+      `<div class="tc-src">讲解模型：${esc(j.model || '')}</div>`
+    $('tcBody').scrollTop = $('tcBody').scrollHeight
+  } catch (e) {
+    $('tcBody').innerHTML = `<div style="color:var(--err)">解释失败：${esc(e.message)}</div>`
+  }
+}
+
+function closeTermCard() {
+  if (termState.pinned) { termState.pinned = false; $('tcPin').classList.remove('on'); $('tcPin').textContent = '钉住' }
+  $('termCard').hidden = true
+}
+
+// ── 选词 → 浮出「解释这个词」按钮 → 点击开卡片 ──
+let selPop = null
+function hideSelPop() { if (selPop) { selPop.remove(); selPop = null } }
+
+function showSelPop(word, ctx, rect) {
+  hideSelPop()
+  selPop = document.createElement('button')
+  selPop.className = 'sel-pop'
+  selPop.type = 'button'
+  selPop.textContent = '✦ 解释「' + word + '」'
+  selPop.onclick = (e) => {
+    e.stopPropagation(); e.preventDefault()
+    hideSelPop()
+    openTermCard(word, ctx)
+    (window.getSelection() || {}).removeAllRanges?.()
+  }
+  document.body.appendChild(selPop)
+  const w = selPop.offsetWidth, h = selPop.offsetHeight
+  const left = Math.min(Math.max(8, rect.left + rect.width / 2 - w / 2), window.innerWidth - w - 8)
+  const top = rect.top > h + 12 ? rect.top - h - 8 : rect.bottom + 8
+  selPop.style.left = left + 'px'
+  selPop.style.top = top + 'px'
+}
+
+// 在正文里选中 1..40 个字符的词 → 给上下文（所在段落）
+document.addEventListener('mouseup', (e) => {
+  if (e.target.closest('#termCard, #searchbar, .sel-pop, header, footer, #hist')) { hideSelPop(); return }
+  const sel = window.getSelection && window.getSelection()
+  const text = sel ? String(sel.toString() || '').trim() : ''
+  if (!text || text.length > 40) { hideSelPop(); return }
+  // 必须落在正文（消息/回放）里
+  if (!e.target.closest('.msg-body, .rp-txt, .rtext, .md, .tc-body')) { hideSelPop(); return }
+  const anchor = sel.anchorNode
+  let host = anchor && anchor.nodeType === 1 ? anchor : anchor?.parentElement
+  const p = host?.closest('p,li,h3,h4,h5,h6,td,blockquote') || host?.closest('.msg-body,.rp-txt') || null
+  const ctx = p ? (p.textContent || '').trim().slice(0, 200) : ''
+  let rect = null
+  try { if (sel.rangeCount) rect = sel.getRangeAt(0).getBoundingClientRect() } catch {}
+  rect = rect && rect.width ? rect : (host?.getBoundingClientRect?.() || { left: 0, top: 0, bottom: 40, width: 0, height: 20 })
+  showSelPop(text, ctx, rect)
+})
+// 双击一个词也直接给按钮（比选中更顺手）
+document.addEventListener('dblclick', (e) => {
+  if (e.target.closest('#termCard, #searchbar, .sel-pop, header, footer, #hist')) return
+  if (!e.target.closest('.msg-body, .rp-txt, .rtext, .md')) { hideSelPop(); return }
+  const sel = window.getSelection && window.getSelection()
+  const word = String(sel?.toString() || '').trim()
+  if (!word || word.length > 40) return
+  const p = e.target.closest('p,li,h3,h4,h5,h6,td,blockquote') || e.target.closest('.msg-body,.rp-txt')
+  const ctx = p ? (p.textContent || '').trim().slice(0, 200) : ''
+  const rect = e.target.getBoundingClientRect()
+  showSelPop(word, ctx, rect)
+})
+// 点别处收起浮层
+document.addEventListener('mousedown', (e) => {
+  if (selPop && !e.target.closest('.sel-pop')) hideSelPop()
+})
+
+$('tcClose').onclick = closeTermCard
+$('tcPin').onclick = () => {
+  termState.pinned = !termState.pinned
+  $('tcPin').classList.toggle('on', termState.pinned)
+  $('tcPin').textContent = termState.pinned ? '已钉住' : '钉住'
+  toast(termState.pinned ? '卡片已钉住，点右上角 × 取消' : '已取消钉住')
+}
+$('tcFollow').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    const q = $('tcFollow').value.trim()
+    if (!q) return
+    $('tcFollow').value = ''
+    askTerm(termState.term, termState.ctx, q)
+  }
+})
+// Esc 关闭术语卡片
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && !$('termCard').hidden && !termState.pinned) { closeTermCard(); return }
+})
+
+
+// 代码块复制：单个 document 委托（不逐块绑监听），成功换 ✓ 1.5s（照 opencode 的 data-copied 交互）
+// clipboard API 需要用户激活；合成事件/旧内核下用 execCommand 兜底
+function copyText(t) {
+  if (navigator.clipboard?.writeText) {
+    return navigator.clipboard.writeText(t).catch((err) => {
+      const ta = document.createElement('textarea')
+      ta.value = t; ta.style.cssText = 'position:fixed;opacity:0'
+      document.body.appendChild(ta); ta.select()
+      const ok = document.execCommand('copy')
+      ta.remove()
+      if (!ok) throw err
+    })
+  }
+  const ta = document.createElement('textarea')
+  ta.value = t; ta.style.cssText = 'position:fixed;opacity:0'
+  document.body.appendChild(ta); ta.select()
+  const ok = document.execCommand('copy')
+  ta.remove()
+  return ok ? Promise.resolve() : Promise.reject(new Error('execCommand 失败'))
+}
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.md-copy')
+  if (!b) return
+  // 错误卡的复制目标是 .terr-body；代码块是 .md-pre code
+  const src = b.closest('.terr')?.querySelector('.terr-body') || b.closest('.md-code')?.querySelector('.md-pre code')
+  if (!src) return
+  copyText(src.textContent).then(() => {
+    b.dataset.copied = '1'; b.textContent = '✓ 已复制'
+    setTimeout(() => { delete b.dataset.copied; b.textContent = '复制' }, 1500)
+  }).catch(() => { b.textContent = '失败'; setTimeout(() => { b.textContent = '复制' }, 1500) })
+})
+
+// ⭐ 卡住检测：opencode 的 bash 工具如果命令没返回，状态会永远停在 running，
+// 而且会阻塞整个会话（模型在等它，之后既没有思考也没有输出）。
+// 这里主动标出来并给出中止入口。
+document.addEventListener('click', (e) => {
+  const b = e.target.closest('.warn-stuck')
+  if (!b) return
+  const sid = b.closest('.blk')?.dataset.sid || b.parentElement?.dataset.sid
+  if (!sid) return
+  if (!confirm('这个工具疑似卡住，中止该会话？\n（中止后你可以重新提问）')) return
+  fetch('/api/abort', { method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionID: sid }) })
+    .then(() => { toast('已中止该会话'); setStatus(sid, 'idle'); stuckNotified.clear() })
+    .catch(() => toast('中止失败'))
+})
+
+setInterval(() => {
+  for (const [pid, start] of toolT0) {
+    const el = document.querySelector(`[data-tool="${CSS.escape(pid)}"]`)
+    if (!el) continue
+    const sec = Math.round((Date.now() - start) / 1000)
+    const badge = el.parentElement?.querySelector('.warn-stuck')
+    if (badge) badge.textContent = sec < 30 ? `· ${sec}s` : (sec < 120 ? `· ${sec}s 偏慢` : `· ${sec}s 疑似卡住`)
+    el.style.color = sec >= 120 ? 'var(--err)' : sec >= 30 ? 'var(--warn)' : ''
+    if (sec >= 120 && !stuckNotified.has(pid)) {
+      stuckNotified.add(pid)
+      toast('一个工具已运行 ' + Math.round(sec / 60) + ' 分钟仍无返回，可能卡住了 → 点「中止」可救回会话', 6000)
+    }
+  }
+  // 时间线：有子代理在跑时每秒推进条长（全部 idle 就停，不白烧 CPU）
+  if (!document.hidden) {
+    for (const r of S.values()) {
+      if (r.parentID || !r.tlEl || r.tlEl.hidden) continue
+      const kids = [...S.values()].filter((x) => x.parentID === r.sid)
+      if (kids.some((k) => k.status !== 'idle' && k.status !== 'error')) scheduleTL(r.sid)
+    }
+  }
+}, 1000)
+
+// ═══════════════ 事件 ═══════════════
+const es = new EventSource('/api/stream')
+es.onopen = () => { $('upDot').className = 'dot ok'; $('upTxt').textContent = '已连接' }
+es.onerror = () => { $('upDot').className = 'dot err'; $('upTxt').textContent = '断开，重连中' }
+es.onmessage = (e) => { let v; try { v = JSON.parse(e.data) } catch { return } handle(v) }
+
+function handle(ev, quiet = false) {
+  const p = ev.properties || {}
+
+  // M17：任何带会话 id 的事件都是该会话的活跃信号（时间线 / 上下文水位）
+  const liveSid = p.sessionID || p.info?.sessionID || p.info?.id || p.part?.sessionID
+  if (liveSid) bumpLive(liveSid, p)
+
+  // 主界面只渲染「正在看的主会话 + 它的直接子代理」，别的会话的渲染事件一律丢弃：
+  // 否则 ensureSession() 会把它们整棵树重新挂回主区（实测装载 1607 条的会话后，
+  // 实时会话会重新长出来，DOM 从 6 千涨到 7.6 万节点，拖宽度直接卡死）。
+  // 状态类事件（busy/idle/error/授权）继续放行，顶栏连接状态和计数才不会失真。
+  const dropRender = (sid, pid) => {
+    if (homeVisible) return true
+    const focus = pinnedSession || liveFocus
+    if (!focus || !sid) return false
+    if (sid === focus) return false
+    if (pid === focus) return false
+    const rr = S.get(sid)
+    return !(rr && rr.parentID === focus)
+  }
+
+  // 服务端：主会话跑完一轮，汇总已写进 output/
+  if (ev.type === 'console.output') {
+    toast(`汇总已保存 · ${p.file}（${(p.bytes / 1024).toFixed(1)}KB）`, 5000)
+    const bar = $('outBar')
+    if (bar) {
+      bar.hidden = false
+      bar.querySelector('.ob-name').textContent = p.file
+      bar.querySelector('.ob-meta').textContent = (p.bytes / 1024).toFixed(1) + 'KB · ' + (p.dir || '')
+    }
+    return
+  }
+
+
+  if (ev.type === 'session.created' && p.info?.id) {
+    if (dropRender(p.info.id, p.info.parentID)) return
+    const i = p.info
+    if (!i.parentID || !S.has(i.parentID)) { if (!i.parentID) rootSession = i.id }
+    ensureSession(i.id, { title: i.title, parentID: i.parentID, agent: i.agent, revert: i.revert,
+      t0: i.time?.created, modelID: modelIdOf(i.model) })
+    return
+  }
+  if (ev.type === 'session.updated' && p.info?.id) {
+    if (dropRender(p.info.id)) return
+    const rec = ensureSession(p.info.id, { parentID: p.info.parentID, revert: p.info.revert })
+    if (p.info.title) rec.titleEl.textContent = cleanTitle(p.info.title)
+    // session.updated 实测每次都带完整会话对象 → revert 按全量信任（unrevert 后键直接消失）
+    const rv = p.info.revert || null
+    if ((rec.revert?.messageID || null) !== (rv?.messageID || null)) {
+      rec.revert = rv
+      paintRevert(rec)
+    }
+    if (rec.metaEl) {
+      const bits = []
+      // SSE 的 session.info.model 是 {modelID, providerID} 对象，直接 push 会显示 [object Object]
+      const m = p.info.model
+      const mid = typeof m === 'string' ? m : m?.modelID
+      if (mid) bits.push(mid)
+      if (p.info.agent) bits.push(p.info.agent)
+      rec.metaEl.textContent = bits.join(' · ')
+    }
+    const mid2 = modelIdOf(p.info.model)
+    if (mid2) rec.modelID = mid2
+    paintCtx(rec)
+    scheduleTL(rec.sid)
+    return
+  }
+
+  if (ev.type === 'session.status' && p.sessionID) {
+    return setStatus(p.sessionID, p.status?.type === 'busy' ? 'busy'
+      : p.status?.type === 'retry' ? 'retry' : 'idle')
+  }
+  if (ev.type === 'session.idle' && p.sessionID) return setStatus(p.sessionID, 'idle')
+  if (ev.type === 'session.error' && p.sessionID) {
+    alarm('error', { sessionID: p.sessionID, body: (p.error && (p.error.data?.message || p.error.message)) || '' })
+    return setStatus(p.sessionID, 'error')
+  }
+  // 1.19 服务端把新权限事件改叫 permission.asked（properties 同旧形状）；
+  // permission.updated 保留兼容 1.18 版服务端。两者都认。
+  if ((ev.type === 'permission.updated' || ev.type === 'permission.asked') && p.sessionID) {
+    if (p.id && !pendingPerms.has(p.id)) {
+      pendingPerms.set(p.id, { p, cardEl: null })
+      paintPermBadge()
+      if (homeVisible) {
+        if (!quiet) { toast('有会话在等授权 · 从主页打开该会话处理'); alarm('perm', { sessionID: p.sessionID, body: permNorm(p).title }) }
+        return
+      }
+      setStatus(p.sessionID, 'waiting')
+      renderPermCard(p)
+      if (!quiet) {
+        toast('有 agent 在等你授权')
+        alarm('perm', { sessionID: p.sessionID, body: permNorm(p).title })   // 回填（quiet）不响，只响实时新来的
+      }
+    } else if (!p.id) {
+      // 老形状没有 id 就没法回复，只亮状态别丢提醒
+      setStatus(p.sessionID, 'waiting')
+      if (!quiet) toast('有 agent 在等你授权')
+    }
+    return
+  }
+  // 事件可能来自别处（终端里回复的）——一起清，保持单一事实源。
+  // 形状两版：1.18 {permissionID, response}；1.19 实测 {requestID, reply}。
+  if (ev.type === 'permission.replied' && (p.permissionID || p.requestID)) {
+    dropPerm(p.permissionID || p.requestID)
+    return
+  }
+
+  // 待办整表快照：直接覆盖
+  if (ev.type === 'todo.updated' && p.sessionID) {
+    todoState.set(p.sessionID, Array.isArray(p.todos) ? p.todos : [])
+    renderTodos(p.sessionID)
+    return
+  }
+
+  // 消息被上游删除（实测：回退后发新消息提交时，旧分支逐条 message.removed）→ 同步摘 DOM。
+  if (ev.type === 'message.removed' && p.sessionID && p.messageID) {
+    if (dropRender(p.sessionID)) return
+    const rec = S.get(p.sessionID); if (!rec) return
+    const mid = p.messageID
+    const el = rec.bodyEl.querySelector('.rp[data-mid="' + CSS.escape(mid) + '"], .msg[data-mid="' + CSS.escape(mid) + '"]')
+    if (el) {
+      const nb = navItems.get(el)
+      if (nb) { nb.remove(); navItems.delete(el) }
+      el.remove()
+    }
+    rec.msgs.delete(mid)
+    msgRole.delete(mid)
+    if (rec.lastMsgId === mid) rec.lastMsgId = null
+    paintCounts()
+    return
+  }
+
+  if (ev.type === 'message.updated' && p.info?.sessionID) {
+    if (dropRender(p.info.sessionID)) return
+    const rec = ensureSession(p.info.sessionID)
+    if (p.info.role) msgRole.set(p.info.id, p.info.role)
+    ensureMsg(rec, p.info.id, p.info.role)
+    if (p.info.time?.completed) setStatus(p.info.sessionID, 'idle')
+    return
+  }
+
+  if (ev.type === 'message.part.updated' && p.part) {
+    if (dropRender(p.part.sessionID)) return
+    const part = p.part
+    let type = part.type
+    partType.set(part.id, type)
+    const rec = ensureSession(part.sessionID)
+    // part 事件不带 role，用户提问的角色从 message.updated 的缓存里取
+    const m = ensureMsg(rec, part.messageID, msgRole.get(part.messageID))
+
+    // 上下文压缩点（summarize 合成的用户消息）→ 一条系统分隔线，不当普通提问渲染
+    if (type === 'compaction') {
+      const el = ensurePart(m, part.id, 'compaction')
+      el.className = 'blk cmp-note'
+      el.textContent = '⧉ 上下文压缩点（此前的对话已被摘要取代，原文仍可在历史记录里查到）'
+      return
+    }
+
+    // task 工具 → 转成派活高亮块
+    if (type === 'tool' && part.tool === 'task') {
+      type = 'dispatch'
+      partType.set(part.id, 'dispatch')
+      const el = ensurePart(m, part.id, 'dispatch')
+      const inp = part.state?.input || {}
+      const desc = inp.description || inp.prompt || part.state?.title || ''
+      el.querySelector('.d-body').textContent = desc
+      el.dataset.p = 'task'
+      // 原工具块也保留一个
+      return
+    }
+    if (type === 'tool' && (part.state?.status === 'pending' || part.state?.status === 'running')) {
+      // 未开始的 task 不重复渲染 dispatch
+    }
+
+    const el = ensurePart(m, part.id, type)
+    if (type === 'reasoning') paintReasoning(el, part)
+    else if (type === 'text' && typeof part.text === 'string') {
+      el.dataset.full = part.text          // delta 通道的数据源，保持一致
+      scheduleMd(el)
+      // 用户提问的正文补进大纲 tooltip
+      const msgEl = el.closest('.msg')
+      if (msgEl && msgEl.classList.contains('you') && msgEl.dataset.navLabel !== part.text) {
+        msgEl.dataset.navLabel = part.text
+        updateNavTips()
+      }
+    }
+    else if (type === 'tool') { paintTool(el, part); scheduleRegroup(rec.bodyEl) }
+    stickBottom(rec)
+    return
+  }
+
+  // ⭐ part 增量 —— 思考文本和正文真正走这条通道
+  if (ev.type === 'message.part.delta' && p.partID && p.field === 'text') {
+    const rec = S.get(p.sessionID); if (!rec) return
+    const type = partType.get(p.partID) || 'text'
+    const m = rec.msgs.get(p.messageID) || (rec.lastMsgId ? rec.msgs.get(rec.lastMsgId) : null)
+    if (!m) return
+    const el = ensurePart(m, p.partID, type)
+    const pre = type === 'reasoning' ? el.querySelector('.rtext') : el
+
+    // 先把增量存进 data-full（数据源），打字机负责按帧渲染
+    pre.dataset.full = (pre.dataset.full || '') + (p.delta || '')
+    // 流式期间只追加纯文本（textContent，不重建 HTML），停 350ms 后 scheduleMd 一次性渲染 Markdown。
+    // 实测每 120ms 整段 innerHTML 重建会让块高反复跳变、选区被打断（M18 改）。
+    enqueue(p.partID, (getAll, upto) => {
+      if (getAll) return pre.dataset.full || ''
+      if (upto != null) { pre.classList.add('plain'); pre.textContent = upto }
+      return pre.dataset.full || ''
+    })
+
+    if (type === 'reasoning' && (el.querySelector('.rtext')?.dataset.full || '').length > 200) {
+      el.querySelector('details').open = true
+    }
+    stickBottom(rec)
+    return
+  }
+}
+
+// ═══════════════ 交互 ═══════════════
+$('modeSeg').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-mode]'); if (!b) return
+  curMode = b.dataset.mode
+  for (const x of $('modeSeg').children) x.classList.toggle('on', x === b)
+  $('modeHint').textContent = curMode === 'plan' ? 'plan · 只读，不会改文件' : 'build · 可读写文件'
+  $('in').placeholder = curMode === 'plan'
+    ? '描述你想做的事（plan 模式只做分析和规划，不改文件）…'
+    : '描述你的需求…（Enter 发送，Shift+Enter 换行）'
+})
+
+$('modelSel').addEventListener('change', () => { curModel = $('modelSel').value })
+
+// 信息密度：精简 = 工具折叠（默认）；全部 = 逐行平铺
+$('densitySeg').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-d]'); if (!b) return
+  compactMode = b.dataset.d === 'compact'
+  localStorage.setItem('ac-density', compactMode ? 'compact' : 'all')
+  for (const x of $('densitySeg').children) x.classList.toggle('on', x === b)
+  document.body.classList.toggle('compact', compactMode)
+  for (const rec of S.values()) regroupTools(rec.bodyEl)
+})
+// 初始化：恢复上次偏好（默认精简）
+// 注意：M6/M7 的 vm 桩没有 localStorage 和 children，下面两处都做了防御
+document.body.classList.toggle('compact', compactMode)
+for (const x of Array.from($('densitySeg').children || [])) x.classList.toggle('on', x.dataset.d === (compactMode ? 'compact' : 'all'))
+
+// ═══════════════ 顶栏响应式（priority-nav 思路的本地化）═══════════════
+// 参照 gijsroge/priority-navigation：量容器剩余宽度，放不下就把项挪进 ⋯ 下拉，
+// 有空间再按相反顺序挪回来。两处不同：
+//   1) 原版收"DOM 末尾"，我们按 data-p 优先级收（小的先收），视觉顺序不变
+//   2) 原版存 breaks 断点栈，我们"试探性恢复"（放回去量一下，不行再收回来），更少状态
+const hdrHidden = []
+const hdrAll = Array.from(($('hdrTools')?.children || [])).filter((el) => el.dataset && el.dataset.p)
+function hdrFits() {
+  const t = $('hdrTools')
+  return !t || t.scrollWidth <= t.clientWidth + 1
+}
+function hdrOriginalNext(el) {
+  const t = $('hdrTools')
+  const i = hdrAll.indexOf(el)
+  for (let j = i + 1; j < hdrAll.length; j++) {
+    if (hdrAll[j].parentElement === t) return hdrAll[j]
+  }
+  return $('hdrMore')
+}
+function adaptHeader() {
+  const t = $('hdrTools'), drop = $('hdrDrop'), more = $('hdrMore')
+  if (!t || !drop || !more) return
+  // 1) 放不下：按 data-p 从小到大收进下拉
+  let guard = 24
+  while (!hdrFits() && guard--) {
+    const vis = hdrAll.filter((el) => el.parentElement === t)
+    if (!vis.length) break
+    vis.sort((a, b) => (+a.dataset.p) - (+b.dataset.p))
+    drop.appendChild(vis[0])
+    hdrHidden.push(vis[0])
+  }
+  // 2) 有空间：试探性恢复（LIFO），放回去量一下，不行再收
+  guard = 24
+  while (hdrHidden.length && guard--) {
+    const el = hdrHidden[hdrHidden.length - 1]
+    t.insertBefore(el, hdrOriginalNext(el))
+    if (!hdrFits()) { drop.appendChild(el); break }
+    hdrHidden.pop()
+  }
+  more.hidden = hdrHidden.length === 0
+  more.textContent = hdrHidden.length ? `⋯ ${hdrHidden.length}` : '⋯'
+  if (!hdrHidden.length) drop.hidden = true
+}
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  let hdrT = null
+  window.addEventListener('resize', () => { clearTimeout(hdrT); hdrT = setTimeout(adaptHeader, 120) })
+  // 字体/模型列表加载完宽度会变，load 后再校一次
+  window.addEventListener('load', () => setTimeout(adaptHeader, 300))
+}
+$('hdrMore')?.addEventListener?.('click', (e) => {
+  e.stopPropagation()
+  const d = $('hdrDrop')
+  if (d.hidden) {
+    // #hdrTools 有 overflow:hidden（测量要用），absolute 下拉会被裁掉；
+    // 所以下拉用 position:fixed，按 ⋯ 按钮的实际位置贴右下角
+    const r = $('hdrMore').getBoundingClientRect()
+    d.style.top = (r.bottom + 8) + 'px'
+    d.style.right = Math.max(8, window.innerWidth - r.right) + 'px'
+    d.hidden = false
+  } else {
+    d.hidden = true
+  }
+})
+document.addEventListener('click', (e) => {
+  const d = $('hdrDrop')
+  if (d && !d.hidden && !e.target.closest('#hdrTools')) d.hidden = true
+})
+setTimeout(adaptHeader, 0)
+
+$('in').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() }
+})
+$('send').onclick = send
+
+async function send() {
+  const text = $('in').value.trim()
+  if (!text) return
+  const fromHome = homeVisible
+  $('send').disabled = true
+  $('abort').disabled = false
+  const input = $('in').value
+  $('in').value = ''
+  try { localStorage.removeItem('ac-draft') } catch {}   // 发出去了就不再是草稿
+  if (fromHome) {
+    leaveHome()
+    main.innerHTML = '<div id="placeholder">正在创建会话…</div>'
+  }
+  // 立刻在界面上显示"你发的"，不等事件回传
+  if (rootSession && S.has(rootSession)) {
+    const rec = S.get(rootSession)
+    const el = document.createElement('div')
+    el.className = 'msg you'
+    el.innerHTML = '<div class="msg-tag you">你发的</div>'
+    const b = document.createElement('div'); b.className = 'msg-body'; b.textContent = text
+    el.dataset.opt = '1'   // 乐观气泡：真实消息事件到达后由 ensureMsg 摘掉
+    el.appendChild(b); rec.bodyEl.appendChild(el); stickBottom(rec)
+  }
+  try {
+    const r = await fetch('/api/send', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ text, sessionID: rootSession, agent: curMode, model: curModel }),
+      signal: AbortSignal.timeout(30000),
+    })
+    const j = await r.json()
+    if (j.error) {
+      toast('发送失败：' + j.error); $('in').value = input
+      if (fromHome) showHome()
+      return
+    }
+    rootSession = j.sessionID
+    if (!pinnedSession) liveFocus = j.sessionID
+    rememberSid(j.sessionID)
+    if (!S.has(j.sessionID)) ensureSession(j.sessionID, { t0: Date.now() })
+    setStatus(j.sessionID, 'busy')
+    // 回退状态下发送新消息 = 上游自动提交回退（旧分支丢弃）：本地 DOM 同步截断这一段
+    const rr = S.get(j.sessionID)
+    if (rr) truncateReverted(rr)
+    if (j.model) toast('已用模型：' + j.model.replace('-free','') + ' · 模式：' + j.agent)
+  } catch (err) {
+    toast('发送出错：' + err.message); $('in').value = input
+    if (fromHome) showHome()
+  } finally { $('send').disabled = false }
+}
+
+$('abort').onclick = async () => {
+  // 被中止的会话里若还有没回复的授权卡，一起清掉（否则卡会留在界面上误导）
+  for (const [pid2, e] of [...pendingPerms]) if (S.has(e.p.sessionID)) dropPerm(pid2)
+  for (const id of [...S.keys()]) {
+    await fetch('/api/abort', { method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionID: id }) }).catch(() => {})
+    setStatus(id, 'idle')
+  }
+  toast('已中止')
+}
+
+$('permBtn').onclick = async () => {
+  if (pinnedSession) return toast('主界面钉在历史会话上——先点顶栏「回到实时」再看授权', 4000)
+  let first = [...pendingPerms.values()].find((e) => e.cardEl && e.cardEl.isConnected)
+  if (!first) {
+    // 权限往往来自"没在看的会话"（比如刚派出去的子任务）。装载它，再把卡挂上。
+    const pend = [...pendingPerms.values()][0]
+    if (!pend) return toast('没有待授权的操作')
+    await loadIntoMain(pend.p.sessionID)
+    // loadIntoMain 收尾会把状态刷成 idle，这里把"等待授权"的琥珀态找回来
+    for (const e of pendingPerms.values()) if (e.p.sessionID === pend.p.sessionID) setStatus(pend.p.sessionID, 'waiting')
+    first = [...pendingPerms.values()].find((e) => e.cardEl && e.cardEl.isConnected)
+  }
+  if (!first) return toast('待授权的会话不在当前主区（可能已中止或在历史里）')
+  first.cardEl.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  first.cardEl.classList.remove('perm-hit'); void first.cardEl.offsetWidth
+  first.cardEl.classList.add('perm-hit')
+}
+
+// 钉住条：主界面现在看的是一条历史会话，实时流仍在跑但不再往这里写。
+function paintPinBar(title) {
+  const b = $('pinBar')
+  if (!pinnedSession) { b.hidden = true; return }
+  b.hidden = false
+  b.querySelector('.ob-name').textContent = '已固定在《' + cleanTitle(title).slice(0, 22) + '》· 其他会话的实时输出暂不显示'
+  $('pinBack').textContent = liveBeforePin ? '回到实时' : '回到主页'
+}
+$('pinBack').onclick = async () => {
+  const back = liveBeforePin
+  liveBeforePin = null
+  if (back) await loadIntoMain(back)
+  else await showHome()
+}
+
+$('clearBtn').onclick = () => { showHome() }
+
+// 主页 / 时间线 / 子会话的点击委托（innerHTML 重绘不会丢监听）
+main.addEventListener('click', (e) => {
+  const op = e.target.closest('[data-open]')
+  if (op) { loadIntoMain(op.dataset.open); return }
+  const kt = e.target.closest('[data-kids]')
+  if (kt) {
+    const host = kt.closest('.session')
+    if (!host) return
+    const rid = host.id.slice(2)
+    setKids(rid, kt.dataset.kids === 'close')
+    scheduleTL(rid)
+    return
+  }
+  const row = e.target.closest('.tl-row[data-sid]')
+  if (row) {
+    const kid = S.get(row.dataset.sid)
+    if (kid) { toggleKid(kid, false); kid.el.scrollIntoView({ block: 'nearest' }) }
+  }
+})
+
+// ═══════════════ 历史记录 ═══════════════
+let histData = []
+
+function openHist() {
+  $('hist').classList.add('open')
+  if (!histData.length) loadHist()
+  else paintHist()
+}
+function closeHist() { $('hist').classList.remove('open') }
+
+async function loadHist() {
+  const box = $('histList'); box.innerHTML = '<div style="color:var(--muted);padding:12px">读取中…</div>'
+  try {
+    // 取 300（接口上限）：只取 80 的话，主会话一多，子代理会话就被挤出窗口了
+    const r = await fetch('/api/history/list?limit=300')
+    const j = await r.json()
+    if (j.error) throw new Error(j.error)
+    histData = j.sessions || []
+  } catch (e) {
+    box.innerHTML = `<div style="color:var(--err);padding:12px">读取失败：${esc(e.message)}</div>`
+    return
+  }
+  paintHist()
+}
+
+function paintHist() {
+  const q = ($('histQ').value || '').trim()
+  // 全文模式且有查询词 → 走 /api/search；否则退回按标题过滤
+  if (histFullText && q) { runFullText(q); return }
+  $('histSearchStat').textContent = ''
+  const lq = q.toLowerCase()
+  const rows = histData.filter((s) => !lq || String(s.title || '').toLowerCase().includes(lq))
+  if (!rows.length) { $('histList').innerHTML = '<div style="color:var(--muted);padding:12px">没有匹配的会话</div>'; return }
+  const ago = (t) => { const d = Date.now() - t; if (d < 6e4) return '刚刚'; if (d < 36e5) return Math.round(d / 6e4) + ' 分钟前'; if (d < 864e5) return Math.round(d / 36e5) + ' 小时前'; return Math.round(d / 864e5) + ' 天前' }
+  $('histList').innerHTML = '<ul class="dw-list">' + rows.map((s) => `
+    <li class="${s.parentID ? 'child' : ''}" data-sid="${esc(s.id)}">
+      <div class="dw-t">${esc(s.title || '(无标题)')}</div>
+      <div class="dw-m">
+        <span class="badge badge-sm ${s.parentID ? 'badge-primary' : 'badge-neutral'}">${s.parentID ? '子代理' : '主 AI'}</span>
+        <span class="badge badge-sm badge-ghost">${esc(s.agent || '?')}</span>
+        <span>${s.messages} 条消息</span>
+        <span>${s.reasoning} 段思考</span>
+        <span>${s.tools} 次工具</span>
+        <span>${ago(s.time.updated)}</span>
+        <button class="ghost sm dw-load" data-load="${esc(s.id)}" title="把这条历史对话装载进主界面并滚到最新">装载到主界面</button>
+      </div>
+    </li>`).join('') + '</ul>'
+}
+
+// ── 跨会话全文搜索（G）─────────────────────────────────
+let histFullText = true
+let histSearchSeq = 0
+let histSearchTimer = null
+
+/** 片段里按 mark 偏移包 <mark>。后端已把命中区间算好，这里不重新找，避免二次错位 */
+function hitHtml(text, mark) {
+  const esc4 = (s) => esc(s)
+  if (!mark || mark[1] <= 0) return esc4(text)
+  const [a, n] = mark
+  return esc4(text.slice(0, a)) + '<mark>' + esc4(text.slice(a, a + n)) + '</mark>' + esc4(text.slice(a + n))
+}
+
+async function runFullText(q) {
+  const seq = ++histSearchSeq
+  const box = $('histList')
+  $('histSearchStat').textContent = '搜索中…'
+  box.innerHTML = '<div style="color:var(--muted);padding:12px">正在检索全部历史…</div>'
+  let j
+  try {
+    const r = await fetch('/api/search?q=' + encodeURIComponent(q) + '&limit=60')
+    j = await r.json()
+    if (j.error) throw new Error(j.error)
+  } catch (e) {
+    if (seq !== histSearchSeq) return
+    box.innerHTML = `<div style="color:var(--err);padding:12px">搜索失败：${esc(e.message)}</div>`
+    $('histSearchStat').textContent = ''
+    return
+  }
+  if (seq !== histSearchSeq) return          // 已经有更新的查询了，丢弃这次结果
+  const hits = j.hits || []
+  const st = j.status || {}
+  $('histSearchStat').textContent = hits.length
+    ? `${hits.length} 条 · ${j.ms}ms`
+    : `无结果 · ${j.ms}ms`
+  if (!hits.length) {
+    box.innerHTML = `<div style="color:var(--muted);padding:12px">全部历史正文里没有「${esc(q)}」<br>` +
+      `<span style="font-size:11px">已索引 ${st.indexedDocs || 0} 条正文（中文按二字切词，英文按词）</span></div>`
+    return
+  }
+  const ago = (t) => { const d = Date.now() - t; if (d < 6e4) return '刚刚'; if (d < 36e5) return Math.round(d / 6e4) + ' 分钟前'; if (d < 864e5) return Math.round(d / 36e5) + ' 小时前'; return Math.round(d / 864e5) + ' 天前' }
+  box.innerHTML = hits.map((h, i) => `
+    <div class="hit" data-hit="${i}" data-sid="${esc(h.sessionID)}" data-mid="${esc(h.messageID)}" data-pid="${esc(h.partID)}">
+      <div class="hit-h">
+        <span class="hit-t">${esc(h.title || '(无标题)')}</span>
+        <span class="hit-role">${h.role === 'user' ? '你' : (esc(h.agent || 'AI'))}</span>
+      </div>
+      <div class="hit-s">${hitHtml(h.text, h.mark)}</div>
+      <div class="hit-x">${ago(h.time)}${h.time ? '' : ''}</div>
+    </div>`).join('')
+  box._hits = hits
+}
+
+// 把 /api/history 的返回渲染成回放 HTML。抽成独立函数：
+// 历史抽屉的详情页 和 "加载到主界面" 都要用同一份逻辑，避免两处分叉。
+function buildReplayBody(j, opts = {}) {
+  let body = ''
+  // 与实时同一套规则：分组单位是整条"纯工作"消息（无正文、无派活、≥1 个已完成工具、无 task），
+  // 连续的这类消息攒成一组，组内工具总数 ≥3 才折。todowrite 在精简模式当作不存在。
+  const foldInfoRp = (m) => {
+    if (m.role === 'user') return null
+    let n = 0, tot = 0
+    const byTool = {}
+    for (const p of m.parts) {
+      if (p.type === 'text' && p.text && p.text.trim()) return null
+      if (p.type === 'reasoning') continue
+      if (p.type === 'tool' && p.state) {
+        if (compactMode && p.tool === 'todowrite') continue
+        if (p.tool === 'task') return null
+        if ((p.state.status || '') !== 'completed') return null
+        n++
+        const t = p.state.time || {}
+        tot += t.end && t.start ? t.end - t.start : 0
+        byTool[p.tool] = (byTool[p.tool] || 0) + 1
+      }
+    }
+    return n ? { n, tot, byTool } : null
+  }
+  const innerRp = (m) => {
+    let h = ''
+    for (const p of m.parts) {
+      if (p.type === 'reasoning' && p.text) {
+        const t = p.time || {}
+        const dur = t.start && t.end ? ' · ' + ms(t.end - t.start) : ''
+        h += `<details class="reason"><summary><span>思考过程</span><span class="lang">${p.thinking ? 'English' : '中文'}</span><span class="dur">${dur}</span></summary><div class="rtext">${md(p.text)}</div></details>`
+      } else if (p.type === 'tool' && p.state) {
+        if (compactMode && p.tool === 'todowrite') continue
+        h += toolRowHtml(p)
+      }
+    }
+    return h
+  }
+
+  let tbuf = []   // 连续纯工作消息：{n, tot, byTool, inner, full}
+  const flushTools = () => {
+    if (!tbuf.length) return
+    const totalN = tbuf.reduce((s, r) => s + r.n, 0)
+    if (compactMode && totalN >= TG_MIN) {
+      const byTool = {}
+      let tot = 0
+      for (const r of tbuf) {
+        tot += r.tot
+        for (const [k, v] of Object.entries(r.byTool)) byTool[k] = (byTool[k] || 0) + v
+      }
+      const byToolStr = Object.entries(byTool).map(([k, n]) => `${k}×${n}`).join(' ')
+      const sec = tot > 0 ? ` · ${(tot / 1000).toFixed(1)}s` : ''
+      body += `<details class="tgroup"><summary><span class="tg-arrow">▸</span>${totalN} 次工具调用 · ${esc(byToolStr)}${sec}</summary><div class="tg-body">${tbuf.map((r) => r.inner).join('')}</div></details>`
+    } else {
+      body += tbuf.map((r) => r.full).join('')
+    }
+    tbuf = []
+  }
+
+  // 运行中的会话：最后两条消息可能还会收到事件。给它们标上 part id 与全文，
+  // ensureMsg 接管时把内容原样搬进实时节点，增量继续在同一块上长（不会变空白）。
+  const tailSet = opts.busy ? new Set(j.messages.slice(-2).map((m) => m.id)) : null
+  for (const m of j.messages) {
+    const who = m.role === 'user' ? (opts.child ? '派活指令' : '你发的') : 'AI 回复' + (m.agent ? ' · ' + esc(m.agent) : '')
+    const meta = [m.tokens ? m.tokens.input + '↑ ' + m.tokens.output + '↓' : '', m.cost ? '$' + m.cost.toFixed(4) : ''].filter(Boolean).join(' · ')
+    const head = `<div class="rp" data-mid="${esc(m.id)}"><div class="rp-head"><b>${who}</b>${meta ? '<span>' + meta + '</span>' : ''}</div><div class="rp-body">`
+    const live = !!tailSet && tailSet.has(m.id)
+
+    const fi = live ? null : foldInfoRp(m)
+    if (fi) {
+      tbuf.push({ ...fi, inner: innerRp(m), full: head + innerRp(m) + '</div></div>' })
+      continue
+    }
+    flushTools()
+
+    body += head
+    for (const p of m.parts) {
+      const attrs = live ? ` data-pid="${esc(p.id)}"` : ''
+      if (p.type === 'reasoning' && p.text) {
+        const t = p.time || {}
+        const dur = t.start && t.end ? ' · ' + ms(t.end - t.start) : ''
+        const inner = `<details class="reason" open><summary><span>思考过程</span><span class="lang">${p.thinking ? 'English' : '中文'}</span><span class="dur">${dur}</span></summary><div class="rtext"${live ? ` data-full="${esc(p.text)}"` : ''}>${md(p.text)}</div></details>`
+        body += live ? `<div class="blk"${attrs} data-type="reasoning">${inner}</div>` : inner
+      } else if (p.type === 'text' && p.text) {
+        body += `<div class="rp-txt md"${attrs}${live ? ' data-type="text"' : ''}${live ? ` data-full="${esc(p.text)}"` : ''}>${md(p.text)}</div>`
+      } else if (p.type === 'compaction') {
+        body += live ? `<div class="blk cmp-note"${attrs} data-type="compaction">⧉ 上下文压缩点</div>` : '<div class="cmp-note">⧉ 上下文压缩点</div>'
+      } else if (p.type === 'tool' && p.state) {
+        if (compactMode && p.tool === 'todowrite') continue
+        body += live ? `<div class="blk"${attrs} data-type="tool">${toolRowHtml(p)}</div>` : toolRowHtml(p)
+      }
+    }
+    body += '</div></div>'
+  }
+  flushTools()
+  return body
+}
+
+// 把一条历史会话装载进主界面（用户指定）：
+// 清主区 → 建会话卡 → 灌回放内容 → 身份条 → 滚到最新。
+async function loadIntoMain(sid) {
+  let j
+  try {
+    const r = await fetch('/api/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionID: sid }) })
+    j = await r.json()
+    if (j.error) throw new Error(j.error)
+  } catch (e) { toast('装载失败：' + e.message); return }
+
+  let live = null
+  try {
+    const st = await (await fetch('/api/state')).json()
+    live = (st.sessions || []).find((x) => x.id === sid) || null
+  } catch { live = null }
+
+  const ses = j.session
+  leaveHome()
+  // 先记住"装载前主界面正在跑的那条会话"，清空之后就问不到了
+  if (!pinnedSession && rootSession && rootSession !== sid) liveBeforePin = rootSession
+  // 清空当前主界面（先摘 DOM 再清注册表：光 S.clear() 会把卡片留在 DOM 里）
+  for (const r of S.values()) r.el.remove()
+  main.querySelectorAll(':scope > .session, :scope > .child').forEach((el) => el.remove())
+  S.clear(); partType.clear(); msgRole.clear(); queue.clear(); tgOpen.length = 0
+  navItems.clear(); $('msgNav').hidden = true; $('toLatest').hidden = true
+  const ph = $('placeholder'); if (ph) ph.remove()
+
+  // 建主会话卡（用 ensureSession 保证卡片结构/头部和实时一致）
+  const rec = ensureSession(sid, { title: ses.title, agent: ses.agent, parentID: null, t0: ses.time && ses.time.created })
+  rec.titleEl.textContent = cleanTitle(ses.title || '未命名')
+  const stNow = (live && live.status) || 'idle'
+  setStatus(sid, stNow)
+  if (rec.metaEl) {
+    const tk = (ses.tokens_input || 0) + (ses.tokens_output || 0)
+    rec.metaEl.textContent = [tk ? tk.toLocaleString() + ' tok' : '', ses.cost ? '$' + ses.cost.toFixed(4) : '',
+      ses.model || ses.agent || ''].filter(Boolean).join(' · ')
+  }
+  // 灌回放内容（和历史详情同一份渲染）
+  rec.bodyEl.innerHTML = buildReplayBody(j, { child: false, busy: stNow !== 'idle' })
+
+  // 身份条：明确告诉用户"这是从数据库读出来的第几条"，不再让人怀疑是上次残影
+  const when = ses.time && ses.time.updated ? fmtClock(ses.time.updated) : ''
+  const n = (j.messages || []).length
+  const lastM = (j.messages || [])[j.messages.length - 1]
+  const unfinished = lastM && lastM.role !== 'user' && !(lastM.time && lastM.time.completed)
+  const bits = [`<span>历史快照</span>`, `<b>${esc(cleanTitle(ses.title || '未命名'))}</b>`, when ? `<span>最后更新 ${esc(when)}</span>` : '', `<span>${n} 条消息</span>`]
+  if (stNow !== 'idle') bits.push('<span class="snap-live">该会话仍在运行，新输出会继续追加</span>')
+  if (unfinished) bits.push('<span class="snap-warn">最后一条回复在快照时尚未生成完</span>')
+  const bar = document.createElement('div')
+  bar.className = 'snap-bar'
+  bar.innerHTML = bits.filter(Boolean).join('')
+  rec.el.insertBefore(bar, rec.bodyEl)
+
+  // 回退状态只存在实时快照里（历史库没这个字段）：装载时补一次，把回退区压暗
+  rec.revert = (live && live.revert) || null
+  paintRevert(rec)
+
+  // 设为当前主会话：历史快照走 pinned（顶栏给出口），主页新会话走 liveFocus
+  rootSession = sid
+  rememberSid(sid)
+  pinnedSession = sid
+  liveFocus = null
+  paintPinBar(ses.title || '未命名')
+  paintCounts()
+  closeHist()
+  // 滚到最新：先关平滑滚动，连着几帧吸底（真实高度替换估算高度要几帧）
+  follow = true
+  const prevSB = main.style.scrollBehavior
+  main.style.scrollBehavior = 'auto'
+  let settle = 0
+  const pinBottom = () => {
+    main.scrollTop = main.scrollHeight
+    if (++settle < 10) requestAnimationFrame(pinBottom)
+    else main.style.scrollBehavior = prevSB
+  }
+  requestAnimationFrame(pinBottom)
+  toast('已加载：' + cleanTitle(ses.title || '未命名').slice(0, 20))
+}
+
+async function openSession(sid, jump = null) {
+  const d = $('histDetail')
+  d.hidden = false
+  d.innerHTML = '<div class="dw-head"><button class="btn btn-sm btn-ghost" id="histBack">← 返回列表</button><b>读取中…</b></div>'
+  $('histBack').onclick = () => { d.hidden = true }
+  let j
+  try {
+    const r = await fetch('/api/history', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ sessionID: sid }) })
+    j = await r.json()
+    if (j.error) throw new Error(j.error)
+  } catch (e) {
+    d.innerHTML = `<div class="dw-head"><button class="ghost sm" id="histBack">← 返回</button></div><div style="padding:14px;color:var(--err)">读取失败：${esc(e.message)}</div>`
+$('histBack').onclick = () => { d.hidden = true }
+  $('histLoadMain').onclick = () => { d.hidden = true; loadIntoMain(sid) }
+    return
+  }
+
+  const ses = j.session
+  const body = buildReplayBody(j, { child: !!ses.parentID })
+
+  d.innerHTML = `
+    <div class="dw-head">
+      <button class="btn btn-sm btn-ghost" id="histBack">← 返回列表</button>
+      <b style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(ses.title || '(无标题)')}</b>
+      <span class="dw-tag">${ses.parentID ? '子代理' : '主 AI'}</span>
+      <span class="dw-tag">${esc(ses.agent || '?')}</span>
+      <button class="ghost sm" id="histLoadMain" title="把这条对话装载进主界面并滚到最新">装载到主界面</button>
+    </div>
+    <div class="dw-body">${body || '<div style="color:var(--muted);padding:12px">这个会话没有可见内容</div>'}</div>
+    <div class="dw-foot">
+      <span class="seg" id="hfModeSeg" title="续聊用的模式">
+        <button data-mode="build">build</button>
+        <button data-mode="plan">plan</button>
+      </span>
+      <select id="hfModel" title="续聊用的模型"></select>
+      <input id="histFollow" placeholder="接着这个会话继续问…" />
+      <button class="btn btn-sm btn-primary" id="histSend">继续</button>
+    </div>`
+  $('histBack').onclick = () => { d.hidden = true }
+  // 全文搜索跳转到具体消息：滚过去 + 块闪一下 + 块内高亮命中的词
+  if (jump && jump.mid) {
+    const block = d.querySelector('.rp[data-mid="' + CSS.escape(jump.mid) + '"]')
+    if (block) {
+      block.scrollIntoView({ block: 'center' })
+      block.style.transition = 'background 1.2s ease'
+      block.style.background = 'rgba(245,167,66,.14)'
+      setTimeout(() => { block.style.background = '' }, 1800)
+      if (jump.term) setTimeout(() => highlightInBlock(block, jump.term), 120)
+    } else {
+      toast('这条消息不在回放范围内（会话太长，只回放了一部分）')
+    }
+  }
+  // 续聊的模式/模型：默认跟随主界面当前值，但可以在这个界面里单独切换
+  let hfMode = curMode
+  $('hfModel').innerHTML = $('modelSel').innerHTML
+  $('hfModel').value = curModel
+  for (const x of Array.from($('hfModeSeg').children || [])) x.classList.toggle('on', x.dataset.mode === hfMode)
+  $('hfModeSeg').onclick = (e) => {
+    const b = e.target.closest('button[data-mode]'); if (!b) return
+    hfMode = b.dataset.mode
+    for (const x of $('hfModeSeg').children) x.classList.toggle('on', x === b)
+  }
+  $('histSend').onclick = async () => {
+    const txt = $('histFollow').value.trim()
+    if (!txt) return
+    $('histFollow').value = ''
+    try {
+      const r = await fetch('/api/send', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionID: sid, text: txt, agent: hfMode, model: $('hfModel').value }) })
+      const j2 = await r.json()
+      if (j2.error) throw new Error(j2.error)
+      closeHist(); toast(`已续聊该会话（${hfMode} · ${$('hfModel').value}），下面是实时输出`)
+    } catch (e) { toast('发送失败：' + e.message) }
+  }
+  $('histFollow').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); $('histSend').click() } }
+}
+
+$('outList').onclick = async () => {
+  openHist()
+  const box = $('histList')
+  try {
+    const j = await (await fetch('/api/output')).json()
+    const dir = j.dir || ''
+    const rows = (j.files || []).filter((f) => f.name !== 'index.md')
+    box.innerHTML = `<div class="dw-note">汇总输出目录：<code>${esc(dir)}</code><br>`
+      + `桌面快捷方式「AI Console - 汇总结果」指向这里。</div>`
+      + (rows.length
+        ? '<ul class="dw-list">' + rows.map((f) => `<li data-out="${esc(f.name)}">
+            <div class="dw-t">${esc(f.name.replace(/\.md$/, ''))}</div>
+            <div class="dw-m"><span>${(f.bytes / 1024).toFixed(1)}KB</span>
+              <span>${new Date(f.mtime).toLocaleString('zh-CN')}</span></div></li>`).join('') + '</ul>'
+        : '<div style="color:var(--muted);padding:12px">还没有汇总文件</div>')
+  } catch (e) {
+    box.innerHTML = `<div style="color:var(--err);padding:12px">读取失败：${esc(e.message)}</div>`
+  }
+  $('histDetail').hidden = true
+}
+
+$('histBtn').onclick = openHist
+$('histClose').onclick = closeHist
+$('histRefresh').onclick = loadHist
+$('histQ').oninput = () => {
+  clearTimeout(histSearchTimer)
+  histSearchTimer = setTimeout(paintHist, histFullText ? 220 : 0)
+}
+$('histSearchMode').onclick = () => {
+  histFullText = !histFullText
+  const b = $('histSearchMode')
+  b.classList.toggle('on', histFullText)
+  b.textContent = histFullText ? '全文' : '标题'
+  $('histQ').placeholder = histFullText ? '搜索全部历史正文…' : '按标题过滤…'
+  paintHist()
+}
+$('histList').addEventListener('click', (e) => {
+  const loadBtn = e.target.closest('[data-load]')
+  if (loadBtn) { e.stopPropagation(); loadIntoMain(loadBtn.dataset.load); return }
+  const hit = e.target.closest('.hit[data-hit]')
+  if (hit) {
+    const h = ($('histList')._hits || [])[Number(hit.dataset.hit)]
+    if (h) openSession(h.sessionID, { mid: h.messageID, pid: h.partID, term: ($('histQ').value || '').trim() })
+    return
+  }
+  const li = e.target.closest('li[data-sid]')
+  if (li) openSession(li.dataset.sid)
+})
+// ═══════════════ 会话内搜索（CSS Custom Highlight API）═══════════════
+// 参考 MDN 官方搜索高亮示例：TreeWalker 收文本节点 → 命中建 Range →
+// CSS.highlights.set 注册 → ::highlight() 上色。全程不动 DOM，
+// 所以 md() 重渲染/流式更新不会冲掉高亮（range 失效就防抖重算）。
+const searchState = { open: false, ranges: [], cur: -1, q: '' }
+
+function openSearch() {
+  $('searchbar').hidden = false
+  searchState.open = true
+  const q = $('searchQ')
+  q.focus(); q.select()
+  runSearch()
+}
+function closeSearch() {
+  $('searchbar').hidden = true
+  searchState.open = false
+  searchState.ranges = []; searchState.cur = -1
+  if (typeof CSS !== 'undefined' && CSS.highlights) { CSS.highlights.delete('ac-search'); CSS.highlights.delete('ac-current') }
+}
+
+function runSearch(preserveCur = false) {
+  if (!searchState.open) return
+  const prevCur = searchState.cur
+  const q = $('searchQ').value.trim().toLowerCase()
+  searchState.q = q
+  searchState.ranges = []
+  searchState.cur = -1
+  if (typeof CSS === 'undefined' || !CSS.highlights || typeof NodeFilter === 'undefined') {
+    $('searchCnt').textContent = q ? '不支持高亮' : ''
+    return
+  }
+  CSS.highlights.delete('ac-search'); CSS.highlights.delete('ac-current')
+  if (!q) { $('searchCnt').textContent = ''; return }
+  const walker = document.createTreeWalker($('main'), NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      if (!node.textContent.toLowerCase().includes(q)) return NodeFilter.FILTER_REJECT
+      const p = node.parentElement
+      if (!p || p.closest('script,style,#searchbar,textarea,input,select')) return NodeFilter.FILTER_REJECT
+      return NodeFilter.FILTER_ACCEPT
+    },
+  })
+  const ranges = []
+  let node
+  while ((node = walker.nextNode())) {
+    const text = node.textContent.toLowerCase()
+    let pos = 0
+    for (;;) {
+      const idx = text.indexOf(q, pos)
+      if (idx === -1) break
+      const r = new Range()
+      r.setStart(node, idx); r.setEnd(node, idx + q.length)
+      ranges.push(r)
+      pos = idx + q.length
+      if (ranges.length >= 500) break   // 上限保护，防超长会话卡死
+    }
+    if (ranges.length >= 500) break
+  }
+  searchState.ranges = ranges
+  if (!ranges.length) { $('searchCnt').textContent = '0'; return }
+  CSS.highlights.set('ac-search', new Highlight(...ranges))
+  jumpTo(preserveCur && prevCur >= 0 ? Math.min(prevCur, ranges.length - 1) : 0)
+}
+
+function jumpTo(i) {
+  const n = searchState.ranges.length
+  if (!n) return
+  searchState.cur = ((i % n) + n) % n
+  const r = searchState.ranges[searchState.cur]
+  if (typeof CSS !== 'undefined' && CSS.highlights) CSS.highlights.set('ac-current', new Highlight(r))
+  const el = r.startContainer.parentElement
+  if (el) {
+    // 命中若在折叠的思考/工具组里，先展开再滚动（toggle 事件会自动记住展开状态）
+    for (let d = el.closest('details'); d; d = d.parentElement ? d.parentElement.closest('details') : null) d.open = true
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  }
+  $('searchCnt').textContent = `${searchState.cur + 1}/${n}`
+}
+
+// 流式更新时防抖重算高亮（保留当前序号），vm 测试环境没有 MutationObserver 则跳过
+if (typeof MutationObserver !== 'undefined') {
+  let searchDebounce = null
+  const searchMO = new MutationObserver(() => {
+    if (!searchState.open || !searchState.q) return
+    clearTimeout(searchDebounce)
+    searchDebounce = setTimeout(() => runSearch(true), 300)
+  })
+  searchMO.observe(document.getElementById('main'), { childList: true, subtree: true, characterData: true })
+}
+
+$('searchQ').addEventListener('input', () => runSearch())
+$('searchQ').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); jumpTo(searchState.cur + (e.shiftKey ? -1 : 1)) }
+  if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeSearch(); $('in').focus() }
+})
+$('searchPrev').onclick = () => jumpTo(searchState.cur - 1)
+$('searchNext').onclick = () => jumpTo(searchState.cur + 1)
+$('searchClose').onclick = () => { closeSearch(); $('in').focus() }
+
+document.addEventListener('keydown', (e) => {
+  // Ctrl+F / Cmd+F：拦截浏览器默认查找，弹应用内搜索条（用户拍板）
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+    e.preventDefault(); openSearch(); return
+  }
+  if (e.key === 'Escape') {
+    if (!$('keysPanel').hidden) { $('keysPanel').hidden = true; return }
+    if (!$('widthPanel').hidden) { $('widthPanel').hidden = true; return }
+    if (searchState.open) { closeSearch(); return }
+    const hd = $('hdrDrop'); if (hd && !hd.hidden) { hd.hidden = true; return }
+    closeHist(); $('histDetail').hidden = true
+  }
+  // ? 打开快捷键面板（不在输入框里时）
+  if (e.key === '?' && !e.ctrlKey && !e.metaKey) {
+    const t = e.target
+    if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT')) return
+    e.preventDefault()
+    $('keysPanel').hidden = !$('keysPanel').hidden
+  }
+})
+
+// ═══════════════ 主页（落地页，M18）═══════════════
+// 刷新不再自动重放上次会话（旧 hydrate 会把根+全部子代理逐条重放，越刷越乱）。
+// 先落到一张"继续上次 + 最近会话"的桌子上：点开某条会话 = 装载只读快照；
+// 输入框直接发送 = 新对话。装载/发送后都会记下来，下次「继续上次」就是它。
+const LAST_KEY = 'ac-last-sid'
+let homeVisible = false
+
+function lastSid() { try { return localStorage.getItem(LAST_KEY) || null } catch { return null } }
+function rememberSid(sid) { try { if (sid) localStorage.setItem(LAST_KEY, sid) } catch {} }
+
+function fmtAgo(t) {
+  const d = Math.max(0, Date.now() - (t || 0))
+  if (d < 6e4) return '刚刚'
+  if (d < 36e5) return Math.round(d / 6e4) + ' 分钟前'
+  if (d < 864e5) return Math.round(d / 36e5) + ' 小时前'
+  return Math.round(d / 864e5) + ' 天前'
+}
+function fmtClock(t) {
+  const d = new Date(t || 0)
+  const p2 = (n) => String(n).padStart(2, '0')
+  return `${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`
+}
+
+// 清掉主区里的实时/回放卡片（不动 SSE 连接，也不删服务端任何东西）
+function clearMain() {
+  for (const r of S.values()) r.el.remove()
+  main.querySelectorAll(':scope > .session, :scope > .child').forEach((el) => el.remove())
+  S.clear(); partType.clear(); msgRole.clear(); t0.clear(); queue.clear(); tgOpen.length = 0
+  navItems.clear(); $('msgNav').hidden = true; $('toLatest').hidden = true
+  for (const h of mdPending.values()) clearTimeout(h)
+  mdPending.clear()
+  rootSession = null; pinnedSession = null; liveFocus = null; liveBeforePin = null
+  paintPinBar(); paintCounts()
+  const ph = $('placeholder'); if (ph) ph.remove()
+}
+
+function leaveHome() {
+  if (!homeVisible) return
+  homeVisible = false
+  const h = $('home'); if (h) h.remove()
+}
+
+async function showHome() {
+  homeVisible = true
+  follow = true
+  clearMain()
+  main.scrollTop = 0
+  main.innerHTML = '<div id="home"><div class="home-loading">正在读取会话…</div></div>'
+  try {
+    const [list, st] = await Promise.all([
+      fetch('/api/history/list?limit=200').then((r) => r.json()),
+      fetch('/api/state').then((r) => r.json()).catch(() => ({ sessions: [] })),
+    ])
+    if (!homeVisible) return
+    paintHome(list.sessions || [], st.sessions || [])
+  } catch (e) {
+    if (homeVisible) main.innerHTML = '<div id="home"><div class="home-loading">读取失败：' + esc(e.message) + '</div></div>'
+  }
+}
+
+function paintHome(all, live) {
+  const home = $('home'); if (!home) return
+  if (!all.length) {
+    home.innerHTML = `<div class="home-head"><div class="home-kicker">工作台 · AI CONSOLE</div>
+      <h1>还没有历史会话。直接在下方输入，开第一场。</h1></div>`
+    return
+  }
+  const roots = all.filter((x) => !x.parentID)
+  const kids = new Map()
+  for (const x of all) if (x.parentID) kids.set(x.parentID, (kids.get(x.parentID) || 0) + 1)
+  const running = new Set((live || []).filter((x) => x.status && x.status !== 'idle').map((x) => x.id))
+  const titleOf = (x) => cleanTitle(x.title || '未命名')
+  const whenOf = (x) => fmtAgo(x.time && x.time.updated)
+  const clip = (x) => x.time && x.time.created ? fmtClock(x.time.updated) : ''
+  let last = lastSid()
+  let cont = roots.find((x) => x.id === last)
+  if (!cont && last) {
+    const kid = all.find((x) => x.id === last)
+    if (kid && kid.parentID) cont = roots.find((x) => x.id === kid.parentID)
+  }
+  if (!cont) cont = roots[0]
+  const rest = roots.filter((x) => !cont || x.id !== cont.id).slice(0, 9)
+  const meta = (x) => {
+    const bits = [(x.messages || 0) + ' 条消息']
+    if (kids.get(x.id)) bits.push(kids.get(x.id) + ' 个子代理')
+    bits.push(whenOf(x))
+    return bits
+  }
+  const hero = cont ? `<section class="home-hero" data-open="${esc(cont.id)}" title="打开这条会话">
+    <div class="hh-top"><span class="hh-kicker">${last === cont.id ? '继续上次' : '最近会话'}</span><span class="hh-time">${esc(clip(cont))}</span></div>
+    <div class="hh-title">${esc(titleOf(cont))}</div>
+    <div class="hh-meta">${meta(cont).map(esc).join(' · ')}${running.has(cont.id) ? ' <span class="home-live">运行中</span>' : ''}</div>
+  </section>` : ''
+  const list = rest.length ? `<div class="home-sub">最近会话</div><ul class="home-list">${rest.map((x) => `<li data-open="${esc(x.id)}" title="打开这条会话">
+      <span class="hl-title">${esc(titleOf(x))}</span>
+      ${kids.get(x.id) ? `<span class="hl-kids">${kids.get(x.id)} 子代理</span>` : ''}
+      <span class="hl-meta">${esc(whenOf(x))}</span>${running.has(x.id) ? '<span class="home-live" title="运行中"></span>' : ''}
+    </li>`).join('')}</ul>` : ''
+  home.innerHTML = `<div class="home-head"><div class="home-kicker">工作台 · AI CONSOLE</div>
+      <h1>从这里继续，或直接在下方输入开始新的。</h1></div>
+    ${hero}${list}
+    <div class="home-foot">点会话 = 打开历史快照（可直接续聊）· 输入框发送 = 新对话<br>子代理默认收起，点标题展开 · 实时输出只跟随当前会话</div>`
+}
+
+// ═══════════════ 环境面板（MCP / Skills，只读）═══════════════
+async function loadEnv() {
+  const panel = $('envPanel')
+  const show = panel.hidden
+  panel.hidden = !show
+  $('envBtn').style.background = show ? 'var(--slab2)' : ''
+  if (!show) return
+
+  $('mcpList').innerHTML = $('skillList').innerHTML = '<div style="color:var(--muted);font-size:11px">读取中…</div>'
+  try {
+    const [mcp, skills] = await Promise.all([
+      fetch('/api/mcp').then((r) => r.json()),
+      fetch('/api/skills').then((r) => r.json()),
+    ])
+
+    const names = Object.keys(mcp || {})
+    $('mcpCount').textContent = names.length ? `${names.length} 个` : ''
+    $('mcpList').innerHTML = names.length
+      ? names.map((n) => {
+          const st = (mcp[n] && (mcp[n].status || mcp[n].state)) || 'unknown'
+          const cls = /connected|running|ready/i.test(st) ? 'badge-success' : (/error|failed|disconn/i.test(st) ? 'badge-error' : 'badge-warning')
+          return `<div class="ev-item"><span class="badge badge-sm ${cls}">${esc(st)}</span>
+            <div class="ev-main"><div class="ev-name">${esc(n)}</div></div></div>`
+        }).join('')
+      : '<div style="color:var(--muted);font-size:11px">没有配置 MCP</div>'
+
+    const list = skills || []
+    $('skillCount').textContent = list.length ? `${list.length} 个` : ''
+    $('skillList').innerHTML = list.length
+      ? list.map((k) => `<div class="ev-item"><span class="ev-dot ${k.hasSkill ? 'on' : 'warn'}"></span>
+          <div class="ev-main">
+            <div class="ev-name">${esc(k.name)}</div>
+            <div class="ev-desc">${esc(k.description || '（无描述）')}</div>
+          </div>
+          <span class="ev-tag">${k.bytes ? (k.bytes / 1024).toFixed(1) + 'KB' : '无 SKILL.md'}</span>
+        </div>`).join('')
+      : '<div style="color:var(--muted);font-size:11px">没有找到 Skill</div>'
+  } catch (e) {
+    $('mcpList').innerHTML = `<div style="color:var(--err);font-size:11px">读取失败：${esc(e.message)}</div>`
+  }
+}
+
+$('envBtn').onclick = loadEnv
+
+// ═══════════════ 子代理模型 ═══════════════
+const SUB_AGENTS = ['researcher', 'cross-checker', 'orchestrator']
+let freeModels = []
+
+function paintSubPanel(cur = {}) {
+  for (const sel of $('subPanel').querySelectorAll('select[data-agent]')) {
+    const a = sel.dataset.agent
+    const opts = ['<option value="">跟随主 AI（不指定）</option>']
+      .concat(freeModels.map((m) => `<option value="${esc(m.id)}">${esc(m.name || m.id)}</option>`))
+    sel.innerHTML = opts.join('')
+    sel.value = cur[a] ?? ''
+    sel.onchange = checkSubWarn
+  }
+  checkSubWarn()
+  updateSubState()
+}
+
+function subPick() {
+  const o = {}
+  for (const sel of $('subPanel').querySelectorAll('select[data-agent]')) o[sel.dataset.agent] = sel.value
+  return o
+}
+
+function checkSubWarn() {
+  const p = subPick()
+  const w = $('spWarn')
+  const r = p.researcher, c = p['cross-checker']
+  const msgs = []
+  if (r && c && r === c) msgs.push('researcher 和 cross-checker 用了同一个模型 —— cross-checker 的价值就在于「用不同模型看同一份结论」，同模型会共享确认偏误，建议改成两个不同的。')
+  if (r && p.orchestrator === r && c && p.orchestrator === c) msgs.push('三个子代理全部同模型，等于没有分工。')
+  w.hidden = !msgs.length
+  w.textContent = msgs.join(' ')
+  updateSubState()
+}
+
+function updateSubState() {
+  const p = subPick()
+  const n = Object.values(p).filter(Boolean).length
+  $('spState').textContent = n === 0
+    ? '当前：三个都跟随主 AI'
+    : `当前：${n} 个已指定，${3 - n} 个跟随主 AI`
+  $('subBtn').style.color = n ? 'var(--signal)' : ''
+}
+
+async function loadSubModels() {
+  const panel = $('subPanel')
+  const show = panel.hidden
+  panel.hidden = !show
+  $('subBtn').style.background = show ? 'var(--slab2)' : ''
+  if (!show) return
+  try {
+    const [h, c] = await Promise.all([
+      fetch('/api/health').then((r) => r.json()),
+      fetch('/api/subagent-model').then((r) => r.json()),
+    ])
+    freeModels = h.models || []
+    paintSubPanel(c.current || {})
+  } catch (e) { toast('读取失败：' + e.message) }
+}
+
+$('subBtn').onclick = loadSubModels
+$('spCancel').onclick = () => { $('subPanel').hidden = true; $('subBtn').style.background = '' }
+$('spSave').onclick = async () => {
+  const p = subPick()
+  const btn = $('spSave'); btn.disabled = true; btn.textContent = '保存中…'
+  try {
+    const r = await fetch('/api/subagent-model', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(p),
+    })
+    const j = await r.json()
+    if (j.error) throw new Error(j.error)
+    // 以上游实际返回为准：文件写了不等于 opencode 真的换成了
+    const okAll = SUB_AGENTS.every((a) => (j.actual?.[a] || '') === (p[a] || ''))
+    $('subPanel').hidden = true; $('subBtn').style.background = ''
+    toast(okAll ? '已生效 · ' + j.note : '已写入文件，但上游没完全生效：' + JSON.stringify(j.actual))
+  } catch (e) { toast('保存失败：' + e.message) }
+  btn.disabled = false; btn.textContent = '保存'
+}
+document.addEventListener('click', (e) => {
+  const p = $('subPanel')
+  if (!p.hidden && !p.contains(e.target) && !e.target.closest('#subBtn')) {
+    p.hidden = true; $('subBtn').style.background = ''
+  }
+  const q = $('envPanel')
+  if (!q.hidden && !q.contains(e.target) && !e.target.closest('#envBtn')) {
+    q.hidden = true; $('envBtn').style.background = ''
+  }
+  const sp2 = $('shotsPanel')
+  if (!sp2.hidden && !sp2.contains(e.target) && !e.target.closest('#shotsBtn')) {
+    sp2.hidden = true; $('shotsBtn').classList.remove('btn-active')
+  }
+})
+
+function boot() { showHome().finally(() => loadPendingPerms()) }
+
+// ═══════════════ 内容列宽度调节（F6）═══════════════
+// 形态参考 Obsidian 的 Readable line length（设置页滑块 + 配置持久化），
+// 快调方式参考 obsidian-corset 的 Alt+滚轮（只改一个 CSS 变量，不重排布局）。
+const ACW_MIN = 60, ACW_MAX = 130, ACW_DEF = 92
+const acwClamp = (v) => Math.max(ACW_MIN, Math.min(ACW_MAX, Math.round(v)))
+const acwGet = () => {
+  try { return acwClamp(+(localStorage.getItem('ac-w') || ACW_DEF)) } catch { return ACW_DEF }
+}
+const acwSet = (v) => {
+  const n = acwClamp(v)
+  // vm 测试桩的 style 是空对象没有 setProperty，这里必须防御
+  const el = document.documentElement
+  if (el && el.style && typeof el.style.setProperty === 'function') el.style.setProperty('--acw', n + 'ch')
+  try { localStorage.setItem('ac-w', String(n)) } catch {}
+  return n
+}
+acwSet(acwGet())
+const acwPaint = () => { const n = acwGet(); $('wpRange').value = String(n); $('wpVal').textContent = n + 'ch' }
+acwPaint()
+$('wpRange').addEventListener('input', () => { acwSet(+$('wpRange').value); acwPaint() })
+$('wpReset').onclick = () => { acwSet(ACW_DEF); acwPaint() }
+$('widthBtn').onclick = (e) => {
+  e.stopPropagation()
+  const p = $('widthPanel')
+  if (!p.hidden) { p.hidden = true; return }
+  acwPaint()
+  const r = $('widthBtn').getBoundingClientRect()
+  p.hidden = false
+  // 贴住「宽度」按钮左上角，尽量不挡内容
+  p.style.top = (r.bottom + 8) + 'px'
+  p.style.right = Math.max(8, window.innerWidth - r.left) + 'px'
+  $('wpRange').focus()
+}
+document.addEventListener('click', (e) => {
+  const p = $('widthPanel')
+  if (!p.hidden && !e.target.closest('#widthPanel') && !e.target.closest('#widthBtn')) p.hidden = true
+})
+// Alt+滚轮上下调（输入框里不拦，那里还得照常换行/操作）
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  window.addEventListener('wheel', (e) => {
+    if (!e.altKey) return
+    const t = e.target
+    if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT' || t.tagName === 'SELECT')) return
+    e.preventDefault()
+    acwSet(acwGet() + (e.deltaY < 0 ? 2 : -2))
+    acwPaint()
+  }, { passive: false })
+}
+
+// ── F5：快捷键面板 / 回到最新 / 草稿持久化 ──$('keysPanel').addEventListener('click', (e) => { if (e.target.id === 'keysPanel') $('keysPanel').hidden = true })
+// 注意：真正滚动的是 #main（.s-body 只负责内容高度），别拿 .s-body.scrollTop 判断
+$('toLatest').onclick = () => { const m = $('main'); m.scrollTop = m.scrollHeight; follow = true }
+
+// 回到最新：手动往上滚过一屏就出现
+$('main').addEventListener('scroll', () => {
+  const m = $('main')
+  if (!m.scrollHeight) return
+  $('toLatest').hidden = (m.scrollHeight - m.scrollTop - m.clientHeight) <= 320
+}, { passive: true })
+
+// 草稿持久化：刷新不丢没发出去的字
+$('in').addEventListener('input', () => {
+  try { localStorage.setItem('ac-draft', $('in').value) } catch {}
+})
+try { const d = localStorage.getItem('ac-draft'); if (d && !$('in').value) $('in').value = d } catch {}
+
+// 消息大纲：滚动时高亮当前消息（节流到 ~10fps，避免滚动卡顿）
+if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+  let navT = null
+  $('main').addEventListener('scroll', () => {
+    if (navT) return
+    navT = setTimeout(() => { navT = null; updateNavActive() }, 100)
+  })
+}
+// ═══════════════ 截图管理（DaisyUI 灰度块）═══════════════
+async function loadShots() {
+  const panel = $('shotsPanel')
+  const show = panel.hidden
+  panel.hidden = !show
+  $('shotsBtn').classList.toggle('btn-active', !show)
+  if (!show) return
+  await refreshShots()
+}
+
+async function refreshShots() {
+  try {
+    const d = await (await fetch('/api/screenshots')).json()
+    $('shotsDir').textContent = d.dir
+    $('shotsCount').textContent = d.totalCount + ' 张'
+    $('shotsSize').textContent = (d.totalBytes / 1024 / 1024).toFixed(2) + ' MB'
+    $('shotsByDate').innerHTML = d.byDate.length
+      ? d.byDate.map((x) =>
+          `<div class="flex justify-between border-b border-base-300 pb-1">
+             <span>${esc(x.day)}</span><span class="font-mono">${x.count} 张 · ${(x.bytes / 1024).toFixed(0)}KB</span>
+           </div>`).join('')
+      : '<div class="opacity-50">（还没有截图）</div>'
+  } catch (e) { $('shotsDir').textContent = '读取失败：' + e.message }
+}
+
+$('shotsBtn').onclick = loadShots
+$('shotsOpen').onclick = async () => {
+  try {
+    const d = await (await fetch('/api/screenshots/open', { method: 'POST' })).json()
+    if (d.error) toast('打开失败：' + d.error)
+  } catch (e) { toast('打开失败：' + e.message) }
+}
+
+let clearArmed = false, clearTimer = null
+$('shotsClear').onclick = async () => {
+  const btn = $('shotsClear')
+  if (!clearArmed) {
+    clearArmed = true
+    btn.textContent = '再点一次确认清空'
+    btn.classList.remove('btn-outline')
+    clearTimer = setTimeout(() => { clearArmed = false; btn.textContent = '清空'; btn.classList.add('btn-outline') }, 3000)
+    return
+  }
+  clearTimeout(clearTimer); clearArmed = false
+  btn.disabled = true
+  try {
+    const d = await (await fetch('/api/screenshots/clear', { method: 'POST' })).json()
+    toast(`已清空 ${d.deleted} 张截图，释放 ${(d.freedBytes / 1024).toFixed(0)}KB`)
+    await refreshShots()
+  } catch (e) { toast('清空失败：' + e.message) }
+  btn.disabled = false; btn.textContent = '清空'; btn.classList.add('btn-outline')
+}
+
+// 计数可点：消息 → 打开历史；子代理 → 定位到第一个子代理卡片
+$('cntMsg').onclick = () => openHist()
+$('cntMsg').onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openHist() } }
+function focusFirstChild() {
+  const kid = document.querySelector('#main .child')
+  if (!kid) { toast('当前没有子代理会话'); return }
+  kid.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  const prev = kid.style.transition
+  kid.style.transition = 'border-color .3s'
+  kid.style.borderLeftColor = 'var(--signal)'
+  setTimeout(() => { kid.style.borderLeftColor = ''; kid.style.transition = prev }, 1600)
+}
+$('cntSub').onclick = focusFirstChild
+$('cntSub').onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); focusFirstChild() } }
+
+async function health() {
+  try {
+    const j = await (await fetch('/api/health')).json()
+    models = j.models || []
+    for (const r of S.values()) { paintCtx(r); if (!r.parentID) scheduleTL(r.sid) }
+    const sel = $('modelSel')
+    sel.innerHTML = models.map((m) =>
+      `<option value="${esc(m.id)}"${m.tier === 1 ? '' : ' data-t2="1"'}>${esc(m.id.replace('-free',''))}${m.tier === 1 ? '' : ' ⚠️'}</option>`).join('')
+    if (!curModel || !models.some((m) => m.id === curModel)) curModel = models[0]?.id
+    sel.value = curModel || ''
+    const b = $('banner')
+    if (j.modelWarning) {
+      b.style.display = 'block'
+      b.textContent = `⚠️ 可用免费模型只剩 ${models.length} 个：${models.map((m) => m.id).join('、')}。免费模型限时提供，耗尽后需转付费。` +
+        (j.modelBlocked?.length ? ` 已自动排除 ${j.modelBlocked.length} 个（隐私原因）。` : '')
+    } else b.style.display = 'none'
+    $('send').disabled = false
+  } catch { $('upTxt').textContent = '服务未就绪' }
+}
+health()
+boot()                 // 刷新后先落到主页（M18）
+setInterval(health, 30000)
+
+setInterval(() => {
+  for (const [pid, s] of t0) {
+    const el = document.querySelector(`[data-pid="${CSS.escape(pid)}"] .dur`)
+    if (el && !el.dataset.done) el.textContent = ms(Date.now() - s)
+  }
+}, 500)
+</script>
+</body>
+</html>

@@ -1,0 +1,54 @@
+@import "tailwindcss";
+@plugin "daisyui";
+
+/*
+  信号台色板 → Tailwind theme
+  这样工具类就有具名令牌可用（bg-graphite、text-muted、border-rule…），
+  而且和 DaisyUI 的 theme 变量对齐，组件默认就是这个配色。
+*/
+@theme {
+  --color-graphite: #0F1319;
+  --color-slab: #161C24;
+  --color-slab2: #1B222B;
+  --color-rule: #232B36;
+  --color-rule2: #2F3A47;
+  --color-signal: #57E0C2;
+  --color-signaldim: #2A6E60;
+  --color-muted: #7C8896;
+  --color-chalk: #E8EDF2;
+  --color-warn: #D9A441;
+  --color-err: #E06B62;
+
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+  --font-mono: "Cascadia Mono", Consolas, ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  --radius-box: 5px;
+  --radius-field: 4px;
+  --radius-selector: 4px;
+}
+
+/* DaisyUI 主题（跟着信号台走，不用它的默认主题） */
+@plugin "daisyui/theme" {
+  name: "signaldesk";
+  default: true;
+  prefersdark: false;
+  color-scheme: dark;
+
+  --color-base-100: #0F1319;
+  --color-base-200: #161C24;
+  --color-base-300: #1B222B;
+  --color-base-content: #E8EDF2;
+  --color-primary: #57E0C2;
+  --color-primary-content: #0A241E;
+  --color-secondary: #2F3A47;
+  --color-secondary-content: #C9D6E2;
+  --color-neutral: #232B36;
+  --color-neutral-content: #7C8896;
+  --color-info: #57E0C2;
+  --color-success: #3FB950;
+  --color-warning: #D9A441;
+  --color-error: #E06B62;
+  --radius-box: 5px;
+  --radius-field: 4px;
+  --radius-selector: 4px;
+}

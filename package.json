@@ -1,0 +1,29 @@
+{
+  "name": "ai-console",
+  "version": "1.0.0",
+  "description": "一个独立于 VSCode 终端的本地 AI 控制台：发需求 → 主 AI 自动拆解派活 → 多窗口并行 → 汇总。",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs",
+    "build:css": "npx @tailwindcss/cli -i src/input.css -o public/app.css",
+    "test": "node M7-md-test.mjs && node M9-toolgroup-test.mjs && node M10-diff-test.mjs && node M18-home-test.mjs"
+  },
+  "keywords": [
+    "opencode",
+    "ai",
+    "console",
+    "wsl",
+    "web-ui"
+  ],
+  "author": "",
+  "license": "PolyForm-Noncommercial-1.0.0",
+  "type": "commonjs",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.3.3",
+    "daisyui": "^5.7.47",
+    "tailwindcss": "^4.3.3"
+  }
+}

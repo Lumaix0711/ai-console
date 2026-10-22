@@ -1,0 +1,62 @@
+{
+  "_说明": "所有路径都不能写绝对值。~ 开头 = 用户目录，相对路径 = 相对本文件夹根目录。",
+  "upstream": {
+    "_说明": "AI Console 自己拉起的独立 opencode serve",
+    "host": "127.0.0.1",
+    "port": 4096,
+    "serveArgs": [
+      "serve",
+      "--hostname",
+      "127.0.0.1"
+    ],
+    "bin": "~/.opencode/bin/opencode"
+  },
+  "paths": {
+    "db": "~/.local/share/opencode/opencode.db",
+    "opencodeConfigDir": "~/.config/opencode",
+    "skillsDir": "~/.config/opencode/skills",
+    "agentsDir": "~/.config/opencode/agents",
+    "outputDir": "output"
+  },
+  "models": {
+    "_说明": "不硬编码模型清单，全部运行时解析。下面是筛选与排序规则。",
+    "freeOnly": true,
+    "requireReasoning": true,
+    "privacyBlocklist": [
+      "nemotron-",
+      "muse-spark-1.3-contributor",
+      "muse-spark-1.2-contributor"
+    ],
+    "privacyReason": {
+      "nemotron-": "官方条款：do not submit personal or confidential data / use is logged",
+      "muse-spark-1.3-contributor": "换取用你的prompt 训练 Meta 模型",
+      "muse-spark-1.2-contributor": "换取用你的 prompt 训练 Meta 模型"
+    },
+    "tierOrder": [
+      {
+        "_说明": "官方隐私章节明确写了 zero-retention、不用于训练的两个",
+        "match": [
+          "space-bunny",
+          "longcat"
+        ],
+        "tier": 1,
+        "label": "zero-retention 不训练"
+      },
+      {
+        "_说明": "其余免费模型：官方只写 for a limited time，没写数据豁免",
+        "match": [],
+        "tier": 2,
+        "label": "限时免费，数据政策未声明豁免"
+      }
+    ],
+    "lowModelWarningThreshold": 2
+  },
+  "sse": {
+    "reconnectMinMs": 1000,
+    "reconnectMaxMs": 15000
+  },
+  "ui": {
+    "maxColumns": 4,
+    "pollDbMs": 8000
+  }
+}

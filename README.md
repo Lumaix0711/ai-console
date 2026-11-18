@@ -607,14 +607,14 @@ M7 测试里有对应的防退化断言（搜「OpenCode 式语义染色」）�
 
 ## 怎么看界面：Windows 侧截图
 
-⚠️ **先说清楚这是谁的**：下面这个浏览器 profile 是 **OpenCode-Browser**，
-属于你**另一个任务**（让 Agent 直接操控浏览器）。AI Console 只是**借用**它开一个
-带调试端口的实例来截图。本项目自己的东西全在 `C:\Users\<你>\<项目目录>\`，
-两者不要混。
+⚠️ **先说清楚这是谁的**：原先那个 **OpenCode-Browser** profile
+（`C:\Users\ASUS\SelfUse\opencode-browser`，约 627MB，属于"让 Agent 直接操控浏览器"那个任务）
+已于 **2026-11-15 删除**。AI Console 的截图只是**借用**一个独立 profile 开带调试端口的实例，
+不占用日常浏览器；本项目自己的东西全在 `C:\Users\<你>\<项目目录>\`，两者不要混。
 
 ### 为什么需要绕这一圈
 
-playwright MCP 配的是 **CDP 连接模式**（去连已开着的 `127.0.0.1:9222`），
+截图链路走 **CDP 连接模式**（连 Windows 侧已开着的 `127.0.0.1:9222`），
 没有浏览器在跑就连不上。而就算用 Edge 的 `--remote-debugging-port` 拉起来，WSL 侧也连不上：
 
 - Edge 的 CDP 只绑 **Windows 的 `127.0.0.1`**（`--remote-debugging-address` 在新版被忽略）
@@ -688,13 +688,14 @@ WSHOT='\\wsl.localhost\<发行版>\home\<你>\ai-console\tools\shot.mjs'
 2. **就绪探测必须用 Windows 侧的 curl**。WSL 侧永远连不上 9222，用它判断会误判
 3. **页面默认是空的**（新开标签没有历史回填），要验证实时区必须在页面里自己发消息
 4. 这个 CDP 浏览器有时会自己退出。重新拉起约 1 秒 —— 复用已有 profile 所以很快
-   （当初新建 profile 要 12 秒以上，那是 `aiconsole-cdp` 被删掉的原因）
+   （profile 已随 OpenCode-Browser 于 2026-11-15 删除，下次会新建一个，首次约 12 秒以上）
 
 ### 已清理的临时目录
 
 | 目录 | 状态 |
 |---|---|
-| `Temp\aiconsole-cdp\`（521MB） | 已删 —— 重复的 Edge profile，复用 OpenCode-Browser 了 |
+| `Temp\aiconsole-cdp\`（521MB） | 已删 —— 重复的 Edge profile |
+| `SelfUse\opencode-browser\`（627MB） | 已删（2026-11-15）—— playwright / 浏览器自动化任务的 Edge profile |
 | `Temp\aiconsole-cdp-hs\`（98MB） | 已删 —— `--headless` 方案失败后的废料 |
 | `Temp\aiconsole-tools\` | 已删 —— 截图脚本已挪到 `AI-Console\` |
 
